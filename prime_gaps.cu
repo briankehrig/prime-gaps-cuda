@@ -54,7 +54,7 @@ __constant__ bool IS_COPRIME_30[15] = {
 
 __constant__ const uint32_t SHARED_SIZE_WORDS = 12288; // SET THIS TO BE THE TOTAL SIZE OF SHARED MEMORY
 __constant__ const uint32_t NUM_SMALL_PRIMES = 23;
-__constant__ const uint32_t NUM_MEDIUM_PRIMES = 512 - 80;
+__constant__ const uint32_t NUM_MEDIUM_PRIMES = 256 - 80;
 
 
 
@@ -217,7 +217,7 @@ __device__ uint128_t squareMod84(uint128_t a, uint128_t mod, uint128_t magic) {
     return fastMod((fastMod(a*ahi, mod, magic) << 42) + a*alo, mod, magic);
 }
 
-__device__ bool fermatTest645(uint128_t n) {
+__device__ bool fermatTest645_BRIAN(uint128_t n) {
     // n must be < 2^64.5 ~ 26087635650665564424 = 2.6087e19
     uint128_t result = 1;
     uint128_t mod128 = ((uint128_t) -1) % n + 1;
@@ -257,6 +257,176 @@ __device__ bool fermatTest84(uint128_t n) {
     }
     return result == 1;
 }
+
+
+__device__ uint64_t my_getMagic1(uint128_t mod)
+{
+	// precomputes (2^128 - 1)/ mod    (a 64 bits number)
+	// !! THIS ONLY WORKS IF mod > 2^64, otherwise we would get overflow!
+	return (uint64_t) ((((uint128_t) 0) - 1) / mod);
+}
+
+__device__ uint128_t my_getMagic2(uint128_t mod, uint64_t magic1)
+{
+	// precomputes 2^96 % mod    (a 65 bits number)
+	//
+	// this magic helps later to reduce a 128-bit number r to less than 97 bits
+	// magic2 = (1 << 96) % mod
+	// r =  (r & ((1 << 96) -1)) + (r >> 96) * magic2
+	// 
+#if 0
+	// slow way
+	uint128_t t = 1;
+	t <<= 96;
+	t %= mod;
+#else
+	// faster way : barrett reduction
+	uint128_t t = (uint128_t) 1 << 96;
+	uint128_t e = (uint128_t) magic1 << 32;
+	uint64_t e_hi = (uint64_t) (e >> 64);
+	uint64_t mod_lo = (uint64_t) mod;
+	t -= ((uint128_t) mod_lo * e_hi) + ((uint128_t) e_hi << 64);
+	t -= t >= mod ? mod : 0;
+#endif
+	if (t >> 64)
+		t += ((uint128_t) 0xfffffffffffffffeull) << 64;
+	return t;
+}
+
+// input n : a number up to 64 + 8 = 72 bits
+// input mod : the modulus withouts top bit (bit 64 is always 1)
+// output result, a number less than 68 bits
+//
+// This code assumes the compiler knows how to optimize in 1 multiplication
+// res_128 = (uint128_t)op1_64 * op2_64
+// This code assumes the compiler knows how to optimize the 64 bits shift 
+// and the constructions of 128 bits.
+
+__device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64_t magic1, uint128_t magic2)
+{
+	uint64_t n_lo = (uint64_t) n;
+	uint64_t n_hi = (uint64_t) (n >> 64);	// let assume n_hi is less than 8 bits
+
+	// step 1
+	// do the squaring r = n_lo^2 + n_hi^2 + 2 * n_lo * n_hi;
+	uint128_t lo = (uint128_t) n_lo * n_lo;	// lo is less than 64+64 = 128 bits
+	uint64_t hi = n_hi * n_hi;	// hi is less than 8 + 8 = 16 bits
+	uint128_t mid = (uint128_t) n_lo * (n_hi * 2);	// mid is less than 64 + 16 + 1 = 81 bits
+	mid += (uint64_t) (lo >> 64);	// mid is less than 81 -> 82 bits
+	lo = (uint64_t) lo;	// lo is less than 64 bits 
+
+	// reduce (r & ((1 << 98) -1)) + (r >> 98) * magic2
+	// by doing
+	// lo += (hi << (98 - 64) + mid >> (98 - 64)) * magic2
+	hi = (hi << 32) + (uint64_t) (mid >> 32);	// hi is less than (16 + 32) (81 - 32) -> 50   bits
+	mid = (uint32_t) mid;	// mid is less than 32 bits
+	uint64_t magic2_lo = (uint64_t) magic2;	// a 64 bit number
+	uint64_t magic2_hi = (uint64_t) (magic2 >> 64);	// a bit mask
+	lo += (uint128_t) magic2_lo *hi;	// lo is less than 50+64 = 114 bits
+	lo += ((uint128_t) (magic2_hi & hi)) << 64;	// lo is less than 64 + 50 = 114 bits
+	// 
+	mid += (lo >> 64);	// mid is less than (114 - 64) (32) -> 51 bits
+	lo = (uint64_t) lo;	// lo is less than 64 bits
+	uint128_t res = (mid << 64) + lo;	// res is less than (51 + 64) (64) -> 116 bits
+
+	// barrett approximate reduction, less than 4 extra bits left
+	// magic1 is 64 bits, mid is 52 bits
+	uint128_t e = (uint128_t) magic1 * mid;	// e is less than  (51 + 64) = 115 bits
+	uint64_t e_hi = (uint64_t) (e >> 64);	// e_hi is less than 51 bits
+	res -= ((uint128_t) mod_lo * e_hi) + (((uint128_t) e_hi) << 64);
+	// - barrett reduction : 1 extra subtraction sometimes needed  (about less 50 %)
+	// - barrett magic1 is underestimated by up to 1 : 1 extra subtraction (rarely needed)
+	// -> res is less than 3 times the modulus, i.e about 0x6xxx...xxx (67 bit number)
+
+	return res;
+
+}
+
+
+#if !defined(EULER_CRITERION)
+#define EULER_CRITERION 1
+#endif
+__device__ bool fermatTest645(uint128_t n)
+{
+
+	// - iterate on 64 bits before squaring would overflow 
+	// and until modular reduction becomes necessary
+	// - hardcode 2 most significant bits
+	// - Advance 2 bits at a time with window size 2
+	uint64_t n_lo = (uint64_t) n;
+	uint64_t result64 = ((n_lo >> 63) & 1) ? 8 : 4;	// 2 most significant bits of the modulus 
+	int bit = 63;
+	while (bit && result64 <= 38967) {
+		bit -= 2;
+		result64 *= result64;
+		result64 *= result64;
+		result64 *= 1 << ((n_lo >> bit) & 3);
+	}
+
+	// - iterate on 128 bits with modular reduction
+	// - at each step and intermediate numbers are only
+	//   a few bits larger than the modulus
+	// - the last iteration is optimized out the loop
+	uint128_t result = result64;
+	uint64_t magic1 = my_getMagic1(n);
+	uint128_t magic2 = my_getMagic2(n, magic1);
+	while (bit > 1) {
+		// advance 2 bits at a time
+		bit -= 2;
+		// square and reduce
+		result = my_fastModSqr(result, n, magic1, magic2);
+		result = my_fastModSqr(result, n, magic1, magic2);
+		// - multiply with window size 2     (values are 1, 2, 4 or 8)
+		// and let the number overflow a little bit
+		// - result is less than 64 + 3 + 4 = 71 bits   (quite over-rounded)
+		result *= 1 << ((n_lo >> bit) & 3);
+	}
+
+#if EULER_CRITERION
+	// - last round with 1 bit to process
+	// - Euler's criterion 2^(n>>1) == legendre_symbol(2,n) (https://en.wikipedia.org/wiki/Euler%27s_criterion)
+	// - This skips the modexp last round. Thanks Mr Leonhard.
+	// - shortcut calculation of legendre symbol (https://en.wikipedia.org/wiki/Legendre_symbol)
+	// legendre_symbol(2,n) = 1 if n = 1 or 7 mod 8     (when bits 1 and 2 are same)
+	// legendre_symbol(2,n) = -1 if n = 3 or 5 mod 8    (when bits 1 and 2 are different)
+	uint64_t legendre = ((n_lo >> 1) & 1) ^ ((n_lo >> 2) & 1);	// shortcut calculation of legendre symbol
+	uint128_t expected = legendre ? n - 1 : 1;	// shortcut calculation of legendre symbol
+
+	// - final reductions :  result %= n;
+	// - the last operation was a multiplication by 1,2,4, or 8, without reduction. 
+	//   therefore, there are many extra bits to shave. worst case is 7 bits.
+	// - use repeated subtractions within a log2 algorithm
+	uint128_t t = n;
+#if 1
+	while (t < result)
+		t *= 2;
+#else
+	t <<= 63 - __builtin_clzll((uint64_t)(result >> 64));
+#endif
+	while (t >= n) {
+		if (result >= t) {
+			result -= t;
+		}
+		t >>= 1;
+	}
+
+#else
+	// - last round with 1 bit to process , and this bit from n-1 is always 0. No multiplication by 2 is needed
+	result = my_fastModSqr(result, n, magic1, magic2);
+	uint128_t expected = 1;
+
+	// - final reductions :  result %= n;
+	// - only a few bits to shave
+	while (result >= n) {
+		result -= n;
+	}
+#endif
+
+	return result == expected;
+}
+
+
+
 
 __device__ bool fermatTest645Old(uint128_t n) {
     // n must be < 2^64.5 ~ 26087635650665564424 = 2.6087e19
