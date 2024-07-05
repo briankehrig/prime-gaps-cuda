@@ -54,7 +54,7 @@ __constant__ bool IS_COPRIME_30[15] = {
 
 __constant__ const uint32_t SHARED_SIZE_WORDS = 12288; // SET THIS TO BE THE TOTAL SIZE OF SHARED MEMORY
 __constant__ const uint32_t NUM_SMALL_PRIMES = 23;
-__constant__ const uint32_t NUM_MEDIUM_PRIMES = 256 - 80;
+__constant__ const uint32_t NUM_MEDIUM_PRIMES = 512 - 80;
 
 
 
