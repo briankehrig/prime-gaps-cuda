@@ -4,3 +4,6 @@
 *.ptx
 *.cubin
 *.fatbin
+*.ncu-rep
+*.nsys-rep
+output/*
