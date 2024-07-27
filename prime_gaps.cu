@@ -43,7 +43,8 @@ using namespace std;
 #define SIEVING_DUPLICATED_PRIMES 80
 #endif
 
-#define WORD_LENGTH 120 // unused currently
+#define WORD_LENGTH 120
+#define WORD_SIEVING_LENGTH 120
 
 // TODO: THESE ARRAYS HAVE TO CHANGE BASED ON WORD_LENGTH!!
 
@@ -116,7 +117,7 @@ __global__ void makeSmallPrimeWheels(uint32_t* wheel1, uint32_t* wheel2, uint32_
         printf("Don't optimize everything out lol ");
     }
     for (uint64_t i=tidx; i<7*11*13*17*19*23*29; i+=stride) {
-        uint64_t wordStart = i * 120;
+        uint64_t wordStart = i * WORD_LENGTH;
         wheel1[i] |= getSmallMask(7, wordStart);
         wheel1[i] |= getSmallMask(11, wordStart);
         wheel1[i] |= getSmallMask(13, wordStart);
@@ -127,7 +128,7 @@ __global__ void makeSmallPrimeWheels(uint32_t* wheel1, uint32_t* wheel2, uint32_
     }
     
     for (uint64_t i=tidx; i<31*37*41*43*47; i+=stride) {
-        uint64_t wordStart = i * 120;
+        uint64_t wordStart = i * WORD_LENGTH;
         wheel2[i] |= getSmallMask(31, wordStart);
         wheel2[i] |= getSmallMask(37, wordStart);
         wheel2[i] |= getSmallMask(41, wordStart);
@@ -136,7 +137,7 @@ __global__ void makeSmallPrimeWheels(uint32_t* wheel1, uint32_t* wheel2, uint32_
     }
     
     for (uint64_t i=tidx; i<53*59*61*67; i+=stride) {
-        uint64_t wordStart = i * 120;
+        uint64_t wordStart = i * WORD_LENGTH;
         wheel3[i] |= getSmallMask(53, wordStart);
         wheel3[i] |= getSmallMask(59, wordStart);
         wheel3[i] |= getSmallMask(61, wordStart);
@@ -144,7 +145,7 @@ __global__ void makeSmallPrimeWheels(uint32_t* wheel1, uint32_t* wheel2, uint32_
     }
     
     for (uint64_t i=tidx; i<71*73*79*83; i+=stride) {
-        uint64_t wordStart = i * 120;
+        uint64_t wordStart = i * WORD_LENGTH;
         wheel4[i] |= getSmallMask(71, wordStart);
         wheel4[i] |= getSmallMask(73, wordStart);
         wheel4[i] |= getSmallMask(79, wordStart);
@@ -469,7 +470,7 @@ __device__ void sieveSmallPrimes(uint32_t* sieve, uint32_t sieveLengthWords, uin
     for (uint32_t i = threadIdx.x; i < sieveLengthWords; i += blockDim.x) {
         // TODO: Check if these modulos are getting optimized, especially for int128
 
-        uint128_t wordStart = start/120 + i;
+        uint128_t wordStart = start/WORD_LENGTH + i;
         // We cannot replace the atomicOr with a non-atomic operation, because that might skip sieving out some values
         // and we can't miss any because of pseudoprimes
         // making this non-atomic actually doesn't increase performance at all, so the bottleneck is elsewhere on my laptop
@@ -484,22 +485,24 @@ __device__ void sieveSmallPrimes(uint32_t* sieve, uint32_t sieveLengthWords, uin
 }
 
 __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengthWords, uint128_t start, uint32_t p) {
+    // this function could do with some optimization overall
     uint128_t x = start / p + 1;
     x = x + NEXT_SIEVE_HIT[x % 30]; // the next number k after start/p that's k for gcd(k,30) = 1
     uint32_t pMultSieveIndex = SIEVE_VALUE_TO_POS[(x % 30) / 2];
     x *= p; // the next number p*k after start that has gcd(k,30) = 1
-    uint32_t currentWord = (uint32_t) ((x - start) / 120);
-    uint32_t currentPosInWord = x % 120;
+    uint32_t currentWord = (uint32_t) ((x - start) / WORD_LENGTH);
+    uint32_t currentPosInWord = x % WORD_LENGTH;
     while (currentWord < sieveLengthWords) {
         // Update the sieve
-        //bool flip = (~sieve[currentWord]) & (1 << SIEVE_VALUE_TO_POS[currentPosInWord / 2]);
-        atomicOr(&sieve[currentWord], 1 << SIEVE_VALUE_TO_POS[currentPosInWord / 2]);
+        if (currentPosInWord < WORD_SIEVING_LENGTH) { // TODO: THIS CHECK LOSES A BUNCH OF TIME
+            atomicOr(&sieve[currentWord], 1 << SIEVE_VALUE_TO_POS[currentPosInWord / 2]);
+        }
 
         // Find the next position
         currentPosInWord += p * SIEVE_INCREMENTS[pMultSieveIndex];
         pMultSieveIndex = (pMultSieveIndex + 1) % 8;
-        currentWord += (currentPosInWord) / 120;
-        currentPosInWord %= 120;
+        currentWord += (currentPosInWord) / WORD_LENGTH;
+        currentPosInWord %= WORD_LENGTH;
     }
 }
 
@@ -532,7 +535,7 @@ __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
         sieveMediumLargePrimesInner(
             sieve + wordStart,
             wordEnd - wordStart,
-            start + wordStart*120,
+            start + wordStart*WORD_LENGTH,
             primeList[primeIdx]
         );
     }
@@ -543,10 +546,10 @@ __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
     // This code works better on an RTX 4090
     if (threadIdx.x < 64) {
         sieveMediumLargePrimesInner(sieve + (sieveLengthWords/4 * (threadIdx.x % 4)), sieveLengthWords/4,
-            start + (sieveLengthWords * 120/4 * (threadIdx.x % 4)), primeList[threadIdx.x/4]);
+            start + (sieveLengthWords * WORD_LENGTH/4 * (threadIdx.x % 4)), primeList[threadIdx.x/4]);
     } else if (threadIdx.x < 128) {
         sieveMediumLargePrimesInner(sieve + (sieveLengthWords/2 * (threadIdx.x % 2)), sieveLengthWords/2,
-            start + (sieveLengthWords * 120/2 * (threadIdx.x % 2)), primeList[(threadIdx.x-64)/2 + 16]);
+            start + (sieveLengthWords * WORD_LENGTH/2 * (threadIdx.x % 2)), primeList[(threadIdx.x-64)/2 + 16]);
     } else {
         sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, primeList[threadIdx.x-80]);
     }
@@ -558,15 +561,15 @@ __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
     if (threadIdx.x < 256) {
         if (threadIdx.x < 128) {
             sieveMediumLargePrimesInner(sieve + (sieveLengthWords/8 * (threadIdx.x % 8)), sieveLengthWords/8,
-                start + (sieveLengthWords * 120/8 * (threadIdx.x % 8)), primeList[threadIdx.x/8]);
+                start + (sieveLengthWords * WORD_LENGTH/8 * (threadIdx.x % 8)), primeList[threadIdx.x/8]);
         } else {
             sieveMediumLargePrimesInner(sieve + (sieveLengthWords/4 * (threadIdx.x % 4)), sieveLengthWords/4,
-                start + (sieveLengthWords * 120/4 * (threadIdx.x % 4)), primeList[(threadIdx.x-128)/2 + 16]);
+                start + (sieveLengthWords * WORD_LENGTH/4 * (threadIdx.x % 4)), primeList[(threadIdx.x-128)/2 + 16]);
         }
     } else {
         if (threadIdx.x < 384) {
             sieveMediumLargePrimesInner(sieve + (sieveLengthWords/2 * (threadIdx.x % 2)), sieveLengthWords/2,
-                start + (sieveLengthWords * 120/2 * (threadIdx.x % 2)), primeList[(threadIdx.x-256)/2 + 16+32]);
+                start + (sieveLengthWords * WORD_LENGTH/2 * (threadIdx.x % 2)), primeList[(threadIdx.x-256)/2 + 16+32]);
         } else {
             sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, primeList[threadIdx.x-272]);
         }
@@ -612,16 +615,16 @@ __device__ void sievePseudoprimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
         uint64_t position = pTimesRho + p - (start % pTimesRho);
         position -= pTimesRho * (position > pTimesRho);
         
-        uint64_t currentWord = position / 120; // this needs to be 64 bit
-        uint32_t currentPosInWord = position % 120;
+        uint64_t currentWord = position / WORD_LENGTH; // this needs to be 64 bit
+        uint32_t currentPosInWord = position % WORD_LENGTH;
 
-        uint32_t pTimesRhoMod120 = pTimesRho % 120;
-        uint64_t pTimesRhoDiv120 = pTimesRho / 120;
+        uint32_t pTimesRhoMod120 = pTimesRho % WORD_LENGTH;
+        uint64_t pTimesRhoDiv120 = pTimesRho / WORD_LENGTH;
         while (currentWord < sieveLengthWords) {
             // Update the sieve
-            if (IS_COPRIME_30[(currentPosInWord % 30) / 2]) {
+            if (currentPosInWord < WORD_SIEVING_LENGTH && IS_COPRIME_30[(currentPosInWord % 30) / 2]) {
                 /*if ((~sieve[currentWord]) & (1 << SIEVE_VALUE_TO_POS[currentPosInWord / 2])) {
-                    uint128_t num = start + ((uint128_t) currentWord)*120 + currentPosInWord;
+                    uint128_t num = start + ((uint128_t) currentWord)*WORD_LENGTH + currentPosInWord;
                     if (fermatTest645(num)) {
                         printf("Pseudoprime p=%d mod 1e19=%lu %lu %u %u\n", p, (uint64_t) (num % 10000000000000000000UL),
                         currentWord, currentPosInWord, (uint32_t) (num%p));
@@ -633,8 +636,8 @@ __device__ void sievePseudoprimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
 
             // Find the next position
             currentPosInWord += pTimesRhoMod120;
-            currentWord += pTimesRhoDiv120 + (currentPosInWord >= 120);
-            currentPosInWord -= 120 * (currentPosInWord >= 120);
+            currentWord += pTimesRhoDiv120 + (currentPosInWord >= WORD_LENGTH);
+            currentPosInWord -= WORD_LENGTH * (currentPosInWord >= WORD_LENGTH);
         }
     }
     __syncthreads();
@@ -645,14 +648,14 @@ __device__ void sieveAll(uint32_t* globalSieve, uint128_t sieveStart, uint32_t s
                          uint32_t* smallPrimeWheel1, uint32_t* smallPrimeWheel2,
                          uint32_t* smallPrimeWheel3, uint32_t* smallPrimeWheel4,
                          uint32_t numBlocks) {
-// the actual sieve length is 120 * sieveLengthWords
+    // the actual sieve length is WORD_LENGTH * sieveLengthWords
 
     uint32_t tidx = blockIdx.x * numBlocks + threadIdx.x;
     
     if (sieveLengthWords % SHARED_SIZE_WORDS != 0) {
         if (tidx == 0) {
-            printf("ERROR: Length of the block (%lu) is not a multiple of 120 times the shared size (%d)\n",
-                   ((uint64_t) sieveLengthWords)*120, SHARED_SIZE_WORDS);
+            printf("ERROR: Length of the block (%lu) is not a multiple of %d times the shared size (%d)\n",
+                   ((uint64_t) sieveLengthWords)*WORD_LENGTH, WORD_LENGTH, SHARED_SIZE_WORDS);
         }
         return;
     }
@@ -666,11 +669,11 @@ __device__ void sieveAll(uint32_t* globalSieve, uint128_t sieveStart, uint32_t s
             sharedSieve[idx] = 0;
         }
 
-        sieveSmallPrimes(sharedSieve, SHARED_SIZE_WORDS, sieveStart + sharedBlockIdx*SHARED_SIZE_WORDS*120L,
+        sieveSmallPrimes(sharedSieve, SHARED_SIZE_WORDS, sieveStart + sharedBlockIdx*SHARED_SIZE_WORDS*WORD_LENGTH,
                          smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4);
 
         if (NUM_MEDIUM_PRIMES > 0) {
-            sieveMediumPrimes(sharedSieve, SHARED_SIZE_WORDS, sieveStart + sharedBlockIdx*SHARED_SIZE_WORDS*120L,
+            sieveMediumPrimes(sharedSieve, SHARED_SIZE_WORDS, sieveStart + sharedBlockIdx*SHARED_SIZE_WORDS*WORD_LENGTH,
                             primeList+NUM_SMALL_PRIMES, NUM_MEDIUM_PRIMES);
         }
 
@@ -742,7 +745,7 @@ __device__ uint64_t findPrevUnsieved(uint32_t* sieve, int64_t bitPosition) {
 }
 
 __device__ uint128_t getNumberFromSieve(uint128_t start, int64_t bitPosition) {
-    return start + bitPosition/32*120 + SIEVE_POS_TO_VALUE[bitPosition%32];
+    return start + bitPosition/32*WORD_LENGTH + SIEVE_POS_TO_VALUE[bitPosition%32];
 }
 
 #define FERMAT_TEST fermatTest65
@@ -771,7 +774,7 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
     uint128_t lastPrime = getNumberFromSieve(start, bitPosition);
     while (!FERMAT_TEST(lastPrime)) {
         if (bitPosition == END_OF_RANGE) {
-            // this will only happen if we find a single gap of size sieveLengthWords*120/threadsPerBlock
+            // this will only happen if we find a single gap of size sieveLengthWords*WORD_LENGTH/threadsPerBlock
             // which almost certainly will never happen
             // if we ever hit the end of the shared memory range while finding a gap, we can ignore it
             // because we will find that gap anyway while searching on the borders of shared memory blocks
@@ -791,7 +794,7 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
 
     while (true) {
         bitPosition = findPrevUnsieved(sieve, --bitPosition);
-        uint128_t toTest = start + bitPosition/32*120 + SIEVE_POS_TO_VALUE[bitPosition%32];
+        uint128_t toTest = start + bitPosition/32*WORD_LENGTH + SIEVE_POS_TO_VALUE[bitPosition%32];
         if (toTest == lastPrime) {
             // found a large gap! this part will get entered rarely so I don't really have to optimize it
             bitPosition += 8 * MIN_GAP_SIZE_30;
@@ -838,7 +841,7 @@ __global__ void kernelBoth(uint32_t* globalSieve1, uint32_t* globalSieve2, uint1
         sieveAll(globalSieve1, sieveStart, sieveLengthWords, primeList, rhoList, primeCount,
             smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4, numSieveBlocks);
     } else {
-        findGaps(globalSieve2, sieveStart - ((uint128_t) sieveLengthWords)*120, sieveLengthWords, numSieveBlocks, resultList);
+        findGaps(globalSieve2, sieveStart - ((uint128_t) sieveLengthWords)*WORD_LENGTH, sieveLengthWords, numSieveBlocks, resultList);
     }
 }
 
@@ -1017,13 +1020,13 @@ __global__ void sievePseudoprimesSeparate(uint128_t start, uint64_t sieveLengthW
         uint64_t position = pTimesRho + p - (start % pTimesRho);
         position -= pTimesRho * (position > pTimesRho);
         
-        uint64_t currentWord = position / 120; // this needs to be 64 bit
-        uint32_t currentPosInWord = position % 120;
+        uint64_t currentWord = position / WORD_LENGTH; // this needs to be 64 bit
+        uint32_t currentPosInWord = position % WORD_LENGTH;
         while (currentWord < sieveLengthWords) {
             if (IS_COPRIME_30[(currentPosInWord % 30) / 2]) {
-                uint128_t num = start + ((uint128_t) currentWord)*120 + currentPosInWord;
+                uint128_t num = start + ((uint128_t) currentWord)*WORD_LENGTH + currentPosInWord;
                 if (num%7 && num%11 && num%13 && num%17 && num%19 && num%23 && num%29 && num%31) {
-                    if (fermatTest65(num)) {
+                    if (FERMAT_TEST(num)) {
                         printBigNum(num);
                         //printf("Pseudoprime p=%d mod 1e19=%lu %lu %u %u\n", p, (uint64_t) (num % 10000000000000000000UL),
                         //currentWord, currentPosInWord, (uint32_t) (num%p));
@@ -1034,9 +1037,9 @@ __global__ void sievePseudoprimesSeparate(uint128_t start, uint64_t sieveLengthW
             
 
             // Find the next position
-            currentPosInWord += pTimesRho % 120;
-            currentWord += (uint64_t) (pTimesRho / 120) + (currentPosInWord >= 120);
-            currentPosInWord -= 120 * (currentPosInWord >= 120);
+            currentPosInWord += pTimesRho % WORD_LENGTH;
+            currentWord += (uint64_t) (pTimesRho / WORD_LENGTH) + (currentPosInWord >= WORD_LENGTH);
+            currentPosInWord -= WORD_LENGTH * (currentPosInWord >= WORD_LENGTH);
         }
     }
 }
@@ -1115,15 +1118,15 @@ int main(int argc, char* argv[]) {
     uint128_t sieveStart = atouint128_t(argv[1]);
     
     uint64_t sieveLength = BLOCK_SIZE;
-    if (sieveLength >= 4294967296L * 120L) {
-        printf("ERROR: Sieve length too large: %ld (maximum is 2^32 * 120)\n", sieveLength);
+    if (sieveLength >= 4294967296L * WORD_LENGTH) {
+        printf("ERROR: Sieve length too large: %ld (maximum is 2^32 * %d)\n", sieveLength, WORD_LENGTH);
         exit(1);
     }
-    if (sieveStart % 120) {
-        printf("ERROR: Sieve start must be a multiple of 120\n");
+    if (sieveStart % WORD_LENGTH) {
+        printf("ERROR: Sieve start must be a multiple of %d\n", WORD_LENGTH);
         exit(1);
     }
-    uint64_t sieveLengthWords = sieveLength / 120;
+    uint64_t sieveLengthWords = sieveLength / WORD_LENGTH;
 
     /*int offset=78498; // doing primes from 1M to 1.1M
     printf("using asdf %u\n", (primeList.size()-offset));
