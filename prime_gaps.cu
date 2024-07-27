@@ -26,8 +26,26 @@ using namespace std;
 #endif
 
 #ifndef MIN_GAP_SIZE
-#define MIN_GAP_SIZE 900
+#define MIN_GAP_SIZE 900 // low enough that it will remind people to set it properly
 #endif
+
+#ifndef BLOCK_SIZE
+#define BLOCK_SIZE 46080000000 // we don't actually need to add the UL as far as I know
+#endif
+
+#ifndef USE_SPECIFIC_SIEVING_THREAD_BREAKDOWN
+#define USE_SPECIFIC_SIEVING_THREAD_BREAKDOWN 0
+#endif
+
+#if USE_SPECIFIC_SIEVING_THREAD_BREAKDOWN
+#define SIEVING_DUPLICATED_PRIMES 189 // this number is based on the test1, test2, test3 arrays
+#else
+#define SIEVING_DUPLICATED_PRIMES 80
+#endif
+
+#define WORD_LENGTH 120 // unused currently
+
+// TODO: THESE ARRAYS HAVE TO CHANGE BASED ON WORD_LENGTH!!
 
 // lower numbers are the least significant digit
 __constant__ uint8_t SIEVE_POS_TO_VALUE[32] = {
@@ -61,7 +79,7 @@ __constant__ bool IS_COPRIME_30[15] = {
 
 __constant__ const uint32_t SHARED_SIZE_WORDS = 12288; // SET THIS TO BE THE TOTAL SIZE OF SHARED MEMORY
 __constant__ const uint32_t NUM_SMALL_PRIMES = 23;
-__constant__ const uint32_t NUM_MEDIUM_PRIMES = 512 - 80;
+__constant__ const uint32_t NUM_MEDIUM_PRIMES = 512 - SIEVING_DUPLICATED_PRIMES;
 
 struct PrimeGap {
     uint128_t startPrime;
@@ -83,7 +101,7 @@ __device__ uint32_t getSmallMask(uint32_t prime, uint64_t wordOffset) {
         // For some reason, if we don't have any print statements in this function,
         // it & the makeSmallPrimeWheels function get completely optimized out, and it doesn't modify the
         // 4 wheels at all. 
-        // TODO: What variable do I have to mark as volatile so I don't need this code?
+        // TODO: What variable do I have to mark as volatile so I don't need this hacky code?
         printf("%d ", word % 1000);
     }
     return word;
@@ -247,14 +265,32 @@ __device__ bool fermatTest84(uint128_t n) {
             result -= n * (result >= n); // using an if statement here miiiiight be faster?
         }
         result = squareMod84(result, n, magic);
-        /*bool overflow = result >= (((uint128_t) 1) << 64);
-        result = fastMod(result * result, n, magic);
-        if (overflow) {
-            result += mod128; // we know that mod128 <= n
-            result -= n * (result >= n);
-        }*/
     }
     return result == 1;
+}
+
+__device__ int64_t mulmod52(uint64_t a, uint64_t b, uint64_t n, double one_over_n) {
+   int64_t tmp, ret;
+   double x, y;
+   x = (int64_t)a;
+   y = (int64_t)b;
+   tmp = (int64_t)n * (int64_t)(x * y * one_over_n);
+   ret = a * b - tmp;
+   if (ret < 0) ret += n;
+   else if (ret >= (int64_t)n) ret -= n;
+   return ret;
+}
+
+__device__ bool fermatTest52(uint64_t n) {
+    int64_t result = 1;
+    double one_over_n = 1.0 / n;
+    for (int bit=51; bit>=0; bit--) {
+        result = mulmod52(result, result, n, one_over_n);
+        if ((n-1) & (1L << bit)) {
+            result *= 2;
+        }
+    }
+    return (result == 1);
 }
 
 
@@ -345,7 +381,7 @@ __device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64_t magic1
 #if !defined(EULER_CRITERION)
 #define EULER_CRITERION 1
 #endif
-__device__ bool fermatTest645(uint128_t n)
+__device__ bool fermatTest65(uint128_t n)
 {
 
 	// - iterate on 64 bits before squaring would overflow 
@@ -425,37 +461,6 @@ __device__ bool fermatTest645(uint128_t n)
 }
 
 
-
-
-__device__ bool fermatTest645Old(uint128_t n) {
-    // n must be < 2^64.5 ~ 26087635650665564424 = 2.6087e19
-    uint128_t result = 1;
-    uint128_t recip = ((uint128_t) -1) % n + 1;
-    if (blockIdx.x == 0 && n % 1000000000 == 880018001) {
-        printf("Doing 2%lu...", lo19(n));
-    }
-    for (int bit=64; bit>=1; bit--) {
-        if ((n >> bit) & 1) {
-            result = (result * 2) % n;
-        }
-        bool overflow = result >= (((uint128_t) 1) << 64);
-        result = (result * result) % n;
-        if (overflow) {
-            result = (result + recip) % n;
-        }
-        //printf("nLo=%lu bit=%d overflow=%d resultHi=%lu resultLo=%lu\n", (uint64_t) n,
-        //        bit, overflow, (uint64_t) (result>>64), (uint64_t) result);
-        if (blockIdx.x == 0 && n % 1000000000 == 880018001) {
-            printf("nLo=%lu bit=%d bitval=%d overflow=%d resultHi=%lu resultLo=%lu\n", (uint64_t) n,
-                    bit, (int) ((n >> bit) & 1), overflow, (uint64_t) (result>>64), (uint64_t) result);
-        }
-    }
-    if (blockIdx.x == 0 && n % 1000000000 == 880018001) {
-        printf("%d\n", result == 1);
-    }
-    return result == 1;
-}
-
 __device__ void sieveSmallPrimes(uint32_t* sieve, uint32_t sieveLengthWords, uint128_t start,
                                  uint32_t* smallPrimeWheel1, uint32_t* smallPrimeWheel2,
                                  uint32_t* smallPrimeWheel3, uint32_t* smallPrimeWheel4) {
@@ -498,10 +503,44 @@ __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengt
     }
 }
 
+__device__ uint32_t test1[256] = {11,11,11,11,11,11,11,11,11,11,11,10,10,10,10,10,10,10,10,10,10,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,8,7,7,7,7,7,7,7,7,7,7,7,7,7,7,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2};
+__device__ uint32_t test2[256] = {0,1,2,3,4,5,6,7,8,9,10,0,1,2,3,4,5,6,7,8,9,0,1,2,3,4,5,6,7,8,0,1,2,3,4,5,6,7,8,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,0,1,2,3,4,5,6,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,5,0,1,2,3,4,0,1,2,3,4,0,1,2,3,4,0,1,2,3,4,0,1,2,3,4,0,1,2,3,4,0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,3,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,2,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1};
+__device__ uint32_t test3[256] = {0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,3,3,3,3,3,3,3,3,3,4,4,4,4,4,4,4,4,5,5,5,5,5,5,5,5,6,6,6,6,6,6,6,6,7,7,7,7,7,7,7,8,8,8,8,8,8,8,9,9,9,9,9,9,10,10,10,10,10,10,11,11,11,11,11,11,12,12,12,12,12,12,13,13,13,13,13,14,14,14,14,14,15,15,15,15,15,16,16,16,16,16,17,17,17,17,17,18,18,18,18,18,19,19,19,19,20,20,20,20,21,21,21,21,22,22,22,22,23,23,23,23,24,24,24,24,25,25,25,25,26,26,26,26,27,27,27,28,28,28,29,29,29,30,30,30,31,31,31,32,32,32,33,33,33,34,34,34,35,35,35,36,36,36,37,37,37,38,38,38,39,39,39,40,40,41,41,42,42,43,43,44,44,45,45,46,46,47,47,48,48,49,49,50,50,51,51,52,52,53,53,54,54,55,55,56,56,57,57,58,58,59,59,60,60,61,61,62,62,63,63,64,64,65,65,66,66};
 __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, uint128_t start,
                                   uint32_t* primeList, uint32_t primeCount) {
     // sieve should be in SHARED MEMORY for this function to work properly
     // from the perspective of this function, the first 23 primes DON'T EXIST!!!!!
+
+    /*
+    (1): array that replaces the individiual numbers (8,8,8,8....4,4,4,4.....1,1,1,1)
+    (2): array that replaces threadIdx.x % 8 (0,1,2,3,4,5,6,7,0,1,2,3.....0,1,0,1,0,1....0,0,0,0)
+    (3): array that has the prime indexes: (0,0,0,0,0,0,0,0,1,1,1.....237,238,239)
+    starting pos in the sieve: depends on (2)
+    length of the search space in sieve: depends on (1)
+    starting N: depends on (2)
+    prime: depends on (3)
+    */
+#if USE_SPECIFIC_SIEVING_THREAD_BREAKDOWN
+    // This code works better on my laptop GPU
+    if (threadIdx.x < 256) {
+        uint32_t numBlocks = test1[threadIdx.x];
+        uint32_t blockIdx = test2[threadIdx.x];
+        uint32_t primeIdx = test3[threadIdx.x];
+        uint32_t wordStart = (uint32_t) (((double) sieveLengthWords) * blockIdx / numBlocks);
+        uint32_t wordEnd   = (uint32_t) (((double) sieveLengthWords) * (blockIdx+1) / numBlocks);
+        // Note: If numBlocks is not a factor of sieveLengthWords, we might end up skipping the last word!!
+        sieveMediumLargePrimesInner(
+            sieve + wordStart,
+            wordEnd - wordStart,
+            start + wordStart*120,
+            primeList[primeIdx]
+        );
+    }
+    for (uint32_t pidx = threadIdx.x+blockDim.x-189; pidx < primeCount; pidx += blockDim.x) {
+        sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, primeList[pidx]);
+    }
+#else
+    // This code works better on an RTX 4090
     if (threadIdx.x < 64) {
         sieveMediumLargePrimesInner(sieve + (sieveLengthWords/4 * (threadIdx.x % 4)), sieveLengthWords/4,
             start + (sieveLengthWords * 120/4 * (threadIdx.x % 4)), primeList[threadIdx.x/4]);
@@ -514,6 +553,28 @@ __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
     for (uint32_t pidx = threadIdx.x+blockDim.x-80; pidx < primeCount; pidx += blockDim.x) {
         sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, primeList[pidx]);
     }
+#endif
+    /*
+    if (threadIdx.x < 256) {
+        if (threadIdx.x < 128) {
+            sieveMediumLargePrimesInner(sieve + (sieveLengthWords/8 * (threadIdx.x % 8)), sieveLengthWords/8,
+                start + (sieveLengthWords * 120/8 * (threadIdx.x % 8)), primeList[threadIdx.x/8]);
+        } else {
+            sieveMediumLargePrimesInner(sieve + (sieveLengthWords/4 * (threadIdx.x % 4)), sieveLengthWords/4,
+                start + (sieveLengthWords * 120/4 * (threadIdx.x % 4)), primeList[(threadIdx.x-128)/2 + 16]);
+        }
+    } else {
+        if (threadIdx.x < 384) {
+            sieveMediumLargePrimesInner(sieve + (sieveLengthWords/2 * (threadIdx.x % 2)), sieveLengthWords/2,
+                start + (sieveLengthWords * 120/2 * (threadIdx.x % 2)), primeList[(threadIdx.x-256)/2 + 16+32]);
+        } else {
+            sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, primeList[threadIdx.x-272]);
+        }
+    }
+    for (uint32_t pidx = threadIdx.x+blockDim.x-272; pidx < primeCount; pidx += blockDim.x) {
+        sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, primeList[pidx]);
+    }
+    */
     
     __syncthreads();
 }
@@ -684,6 +745,7 @@ __device__ uint128_t getNumberFromSieve(uint128_t start, int64_t bitPosition) {
     return start + bitPosition/32*120 + SIEVE_POS_TO_VALUE[bitPosition%32];
 }
 
+#define FERMAT_TEST fermatTest65
 __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthWords, uint32_t startBlock, PrimeGap* resultList) {
     // sieve should be in GLOBAL MEMORY for this function to work properly
     uint32_t gridDimNew = gridDim.x - startBlock;
@@ -707,7 +769,7 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
 
     // Calculate the first prime in the range
     uint128_t lastPrime = getNumberFromSieve(start, bitPosition);
-    while (!fermatTest645(lastPrime)) {
+    while (!FERMAT_TEST(lastPrime)) {
         if (bitPosition == END_OF_RANGE) {
             // this will only happen if we find a single gap of size sieveLengthWords*120/threadsPerBlock
             // which almost certainly will never happen
@@ -735,7 +797,7 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
             bitPosition += 8 * MIN_GAP_SIZE_30;
             bitPosition = findNextUnsieved(sieve, sieveLengthWords, bitPosition);
             uint128_t upperPrime = getNumberFromSieve(start, bitPosition);
-            while (!fermatTest645(upperPrime)) {
+            while (!FERMAT_TEST(upperPrime)) {
                 if (bitPosition == END_OF_RANGE) goto endLabel;
                 bitPosition = findNextUnsieved(sieve, sieveLengthWords, ++bitPosition);
                 upperPrime = getNumberFromSieve(start, bitPosition);
@@ -749,7 +811,7 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
             lastPrime = upperPrime;
             bitPosition += 8 * MIN_GAP_SIZE_30;
         } else {
-            isPrime = fermatTest645(toTest);
+            isPrime = FERMAT_TEST(toTest);
             if (isPrime) lastPrime = toTest;
         }
 
@@ -961,7 +1023,7 @@ __global__ void sievePseudoprimesSeparate(uint128_t start, uint64_t sieveLengthW
             if (IS_COPRIME_30[(currentPosInWord % 30) / 2]) {
                 uint128_t num = start + ((uint128_t) currentWord)*120 + currentPosInWord;
                 if (num%7 && num%11 && num%13 && num%17 && num%19 && num%23 && num%29 && num%31) {
-                    if (fermatTest645(num)) {
+                    if (fermatTest65(num)) {
                         printBigNum(num);
                         //printf("Pseudoprime p=%d mod 1e19=%lu %lu %u %u\n", p, (uint64_t) (num % 10000000000000000000UL),
                         //currentWord, currentPosInWord, (uint32_t) (num%p));
@@ -1052,7 +1114,7 @@ int main(int argc, char* argv[]) {
     // first kilogap above that is 21693776423220625951-6953, or 1833495550873=1.8e12 larger
     uint128_t sieveStart = atouint128_t(argv[1]);
     
-    uint64_t sieveLength = 46080000000UL;
+    uint64_t sieveLength = BLOCK_SIZE;
     if (sieveLength >= 4294967296L * 120L) {
         printf("ERROR: Sieve length too large: %ld (maximum is 2^32 * 120)\n", sieveLength);
         exit(1);
@@ -1223,9 +1285,43 @@ int main(int argc, char* argv[]) {
     - Be smart with this code so that we can fully parallelize the fermat tests
 
 
-REPLACING PRINTF CALLS:
-https://stackoverflow.com/questions/20345702/how-can-i-check-the-progress-of-matrix-multiplication/20381924#20381924%5B/url%5D
+THINGS TO ADD:
 
-CAN WE NOT DO STRICT 120s AND JUST DO A GIANT BIT SERIES???
-    this would require a LOT of changes to the code, probably unfeasible
+settings/worktodo files: (should put this in the readme at some point)
+
+=== settings.txt file format: ===
+# comment: there should be a script to automatically find the optimal parameters to set
+GPU_BLOCKS=192
+NUM_BLOCKS_FOR_SIEVING=120
+GPU_THREADS=512
+BLOCK_SIZE=46080000000
+SORT_OUTPUT_BY_GAPSIZE=1 # If 0, sorts by the prime (increasing). If 1, sorts by the gap size (decreasing)
+NAME=B.Kehrig
+
+=== worktodo.txt file format: ===
+# format: start(e12), end(e12), minGap, username
+18470057,18571674,1200,B.Kehrig  #will find the 1552 and 1572 gaps, but also will take a while (smaller tasks recommended)
+# worktodo will have an ETA
+
+=== output file format: === (location: output/gaps_<start>e12_<end>e12_min<mingap>_<name>.txt)
+===== PRIME GAP REPORT =====
+Minimum gap size: <mingap>
+Gaps >=1200: <x> (or whatever hundred is at least as large as mingap)
+Gaps >=1300: <x>
+... keep going until there are none left
+Largest gap: <size> <prime>
+
+All gaps >= <mingap>: # format: <gapsize> <startprime> <merit> <name>
+1572 18571673432051830099 35.430806 B.Kehrig
+1552 18470057946260698231 34.984359 B.Kehrig # (these would be in the opposite order if SORT_OUTPUPT_BY_GAPSIZE=0)
+
+
+How do I write TESTS???
+Use a compile-time variable RUN_TESTS
+if set, it will do a run with some specified settings (start num, block size, etc...) to stay consistent
+it will look at certain values from sieving and pseudoprime sieving and compare that to the correct values
+For testing the primality tests, ???
+
+I'm pretty sure that for the 4090, the bottleneck is MEMORY ACCESSES, so it cannot benefit from any more fermat test upgrades.
+For my laptop GPU, speeding up the Fermat can still help.
 */
