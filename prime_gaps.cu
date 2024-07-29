@@ -484,8 +484,10 @@ __device__ void sieveSmallPrimes(uint32_t* sieve, uint32_t sieveLengthWords, uin
     __syncthreads();
 }
 
+
 __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengthWords, uint128_t start, uint32_t p) {
     // this function could do with some optimization overall
+    // take inspiration from kim walisch primesieve
     uint128_t x = start / p + 1;
     x = x + NEXT_SIEVE_HIT[x % 30]; // the next number k after start/p that's k for gcd(k,30) = 1
     uint32_t pMultSieveIndex = SIEVE_VALUE_TO_POS[(x % 30) / 2];
@@ -1086,6 +1088,7 @@ int main(int argc, char* argv[]) {
 
     printf("Starting\n");
 
+
     int SMALL_PRIME_LIMIT = 5000000; // don't change this
 
     printf("Generating primes below %u\n", SMALL_PRIME_LIMIT);
@@ -1140,7 +1143,7 @@ int main(int argc, char* argv[]) {
     return 0;*/
     
     uint128_t* endpoints;
-    cudaMalloc((void **) &endpoints, sieveLengthWords/12288 * 2 * sizeof(uint128_t));
+    err = cudaMalloc((void **) &endpoints, sieveLengthWords/12288 * 2 * sizeof(uint128_t));
 
 
 
@@ -1169,8 +1172,16 @@ int main(int argc, char* argv[]) {
     
     uint32_t* globalSieve1;
     uint32_t* globalSieve2;
-    cudaMalloc((void **) &globalSieve1, sieveLengthWords * sizeof(uint32_t));
-    cudaMalloc((void **) &globalSieve2, sieveLengthWords * sizeof(uint32_t));
+    err = cudaMalloc((void **) &globalSieve1, sieveLengthWords * sizeof(uint32_t));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Failed to allocate memory for the sieve: %s\n", cudaGetErrorString(err));
+        return 1;
+    }
+    err = cudaMalloc((void **) &globalSieve2, sieveLengthWords * sizeof(uint32_t));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Failed to allocate memory for the sieve: %s\n", cudaGetErrorString(err));
+        return 1;
+    }
 
 
     cudaMemset(globalSieve1, 0, sieveLengthWords * sizeof(uint32_t));
