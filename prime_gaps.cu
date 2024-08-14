@@ -13,8 +13,6 @@
 #include <numeric>
 #include <unistd.h>
 
-#include "montgomery/montgomery.h"
-
 #define count_set_bits_64 __builtin_popcountll
 
 #define uint128_t unsigned __int128
