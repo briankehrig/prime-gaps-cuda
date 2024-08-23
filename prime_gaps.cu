@@ -13,6 +13,9 @@
 #include <numeric>
 #include <unistd.h>
 
+// #include "fermat/optimized.h"
+#define FERMAT_TEST fermatTest65Full
+
 #define count_set_bits_64 __builtin_popcountll
 
 #define uint128_t unsigned __int128
@@ -56,7 +59,7 @@
 #endif
 
 #if (WORD_LENGTH != WORD_SIEVING_LENGTH)
-    #define SIEVE_BY_30 0
+    #define SIEVE_BY_30 1
 #else
     #ifndef SIEVE_BY_30
     #define SIEVE_BY_30 1
@@ -71,19 +74,37 @@
 
 // TODO: THESE ARRAYS HAVE TO CHANGE BASED ON WORD_LENGTH!!
 
+#if (WORD_LENGTH == 120)
 __constant__ uint8_t SIEVE_POS_TO_VALUE[32] = {
     1,7,11,13,17,19,23,29,
     31,37,41,43,47,49,53,59,
     61,67,71,73,77,79,83,89,
     91,97,101,103,107,109,113,119,
 };
-
 __constant__ uint8_t SIEVE_VALUE_TO_POS[60] = { // WE ARE ONLY TAKING ODD NUMBERS HERE
     0,0,0,1,0,2,3,0,4,5,0,6,0,0,7,
     8,0,0,9,0,10,11,0,12,13,0,14,0,0,15,
     16,0,0,17,0,18,19,0,20,21,0,22,0,0,23,
     24,0,0,25,0,26,27,0,28,29,0,30,0,0,31,
 };
+#elif (WORD_LENGTH == 240)
+__constant__ uint8_t SIEVE_POS_TO_VALUE[32] = {
+    1,7,11,13,17,19,23,29,
+    61,67,71,73,77,79,83,89,
+    121,127,131,133,137,139,143,149,
+    181,187,191,193,197,199,203,209,
+};
+__constant__ uint8_t SIEVE_VALUE_TO_POS[120] = { // WE ARE ONLY TAKING ODD NUMBERS HERE
+    0,0,0,1,0,2,3,0,4,5,0,6,0,0,7,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    8,0,0,9,0,10,11,0,12,13,0,14,0,0,15,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    16,0,0,17,0,18,19,0,20,21,0,22,0,0,23,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    24,0,0,25,0,26,27,0,28,29,0,30,0,0,31,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+};
+#endif
 
 __constant__ bool IS_COPRIME_30[15] = {
     1,0,0,1,0,1,1,0,1,1,0,1,0,0,1,
@@ -94,14 +115,25 @@ __constant__ uint32_t INVERSES_30[15] = {
     1,0,0,13,0,11,7,0,23,19,0,17,0,0,29,
 };
 
-__constant__ const uint32_t NUM_SMALL_PRIMES = 10; // don't change this
 
 #if RUN_TESTS
-__constant__ const uint32_t SHARED_SIZE_WORDS = 12288;
-__constant__ const uint32_t NUM_MEDIUM_PRIMES = 1536 - SIEVING_DUPLICATED_PRIMES;
+#define SHARED_SIZE_WORDS 12288 // DON'T CHANGE THESE VALUES!!!!!
+#define NUM_MEDIUM_PRIMES (1536 - SIEVING_DUPLICATED_PRIMES)
+#define NUM_SMALL_PRIME_WHEELS 2
 #else
-__constant__ const uint32_t SHARED_SIZE_WORDS = 8192; // SET THIS TO BE THE TOTAL SIZE OF SHARED MEMORY
-__constant__ const uint32_t NUM_MEDIUM_PRIMES = 3072 - SIEVING_DUPLICATED_PRIMES;
+#define SHARED_SIZE_WORDS 8192
+#define NUM_MEDIUM_PRIMES (3072 - SIEVING_DUPLICATED_PRIMES)
+#define NUM_SMALL_PRIME_WHEELS 2 // this shouldn't be higher than 4
+#endif
+
+#if (NUM_SMALL_PRIME_WHEELS == 1)
+#define NUM_SMALL_PRIMES 10
+#elif (NUM_SMALL_PRIME_WHEELS == 2)
+#define NUM_SMALL_PRIMES 15
+#elif (NUM_SMALL_PRIME_WHEELS == 3)
+#define NUM_SMALL_PRIMES 19
+#elif (NUM_SMALL_PRIME_WHEELS == 4)
+#define NUM_SMALL_PRIMES 23
 #endif
 
 struct PrimeGap {
@@ -131,7 +163,7 @@ __device__ uint32_t getSmallMask(uint32_t prime, uint64_t wordOffset) {
 }
 
 
-__global__ void makeSmallPrimeWheels(uint32_t* wheel1, uint32_t* wheel2) {
+__global__ void makeSmallPrimeWheels(uint32_t* wheel1, uint32_t* wheel2, uint32_t* wheel3, uint32_t* wheel4) {
     uint32_t tidx = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t stride = blockDim.x * gridDim.x;
 
@@ -148,7 +180,6 @@ __global__ void makeSmallPrimeWheels(uint32_t* wheel1, uint32_t* wheel2) {
         wheel1[i] |= getSmallMask(23, wordStart);
         wheel1[i] |= getSmallMask(29, wordStart);
     }
-    
     for (uint64_t i=tidx; i<31*37*41*43*47; i+=stride) {
         uint64_t wordStart = i * WORD_LENGTH;
         wheel2[i] |= getSmallMask(31, wordStart);
@@ -156,6 +187,20 @@ __global__ void makeSmallPrimeWheels(uint32_t* wheel1, uint32_t* wheel2) {
         wheel2[i] |= getSmallMask(41, wordStart);
         wheel2[i] |= getSmallMask(43, wordStart);
         wheel2[i] |= getSmallMask(47, wordStart);
+    }
+    for (uint64_t i=tidx; i<53*59*61*67; i+=stride) {
+        uint64_t wordStart = i * WORD_LENGTH;
+        wheel3[i] |= getSmallMask(53, wordStart);
+        wheel3[i] |= getSmallMask(59, wordStart);
+        wheel3[i] |= getSmallMask(61, wordStart);
+        wheel3[i] |= getSmallMask(67, wordStart);
+    }
+    for (uint64_t i=tidx; i<71*73*79*83; i+=stride) {
+        uint64_t wordStart = i * WORD_LENGTH;
+        wheel4[i] |= getSmallMask(71, wordStart);
+        wheel4[i] |= getSmallMask(73, wordStart);
+        wheel4[i] |= getSmallMask(79, wordStart);
+        wheel4[i] |= getSmallMask(83, wordStart);
     }
     if (tidx == 0) {
         printf("\n");
@@ -207,7 +252,7 @@ __device__ uint64_t mul_128_64_hi64_inexact(uint128_t a128, uint64_t b64) {
     return (uint64_t) (((a128 >> 64) * b64) >> 64);
 }
 
-__device__ uint128_t fastMod(uint128_t n, uint128_t mod, uint64_t magic) {
+__device__ inline uint128_t fastMod(uint128_t n, uint128_t mod, uint64_t magic) {
     // !!! THIS ONLY WORKS IF mod > 2^64
     // (this is because "magic" needs to fit in a 64-bit int for efficiency)
     uint128_t result = n - mod * mul_128_64_hi64_inexact(n, magic);
@@ -217,31 +262,16 @@ __device__ uint128_t fastMod(uint128_t n, uint128_t mod, uint64_t magic) {
     return result - ((result >= mod) + (result >= mod*2)) * mod;
 }
 
-__device__ uint128_t squareMod84(uint128_t a, uint128_t mod, uint128_t magic) {
+__device__ inline uint128_t superfastMod(uint128_t n, uint128_t mod, uint64_t magic) {
+    // same as fastMod but it might give a result up to 2*mod higher (still correct mod "mod")
+    return n - mod * mul_128_64_hi64_inexact(n, magic);
+}
+
+__device__ inline uint128_t squareMod84(uint128_t a, uint128_t mod, uint128_t magic) {
     uint128_t ahi = a>>42;
 	uint128_t alo = a & 0x3ffffffffffL;
 	//return ((((a*ahi) % m) << 42) + a*alo) % m
     return fastMod((fastMod(a*ahi, mod, magic) << 42) + a*alo, mod, magic);
-}
-
-__device__ bool fermatTest645_BRIAN(uint128_t n) {
-    // n must be < 2^64.5 ~ 26087635650665564424 = 2.6087e19
-    uint128_t result = 1;
-    uint128_t mod128 = ((uint128_t) -1) % n + 1;
-    uint64_t magic = getMagic(n);
-    for (int bit=64; bit>=1; bit--) {
-        if ((n >> bit) & 1) {
-            result *= 2;
-            result -= n * (result >= n); // using an if statement here miiiiight be faster?
-        }
-        bool overflow = result >= (((uint128_t) 1) << 64);
-        result = fastMod(result * result, n, magic);
-        if (overflow) {
-            result += mod128; // we know that mod128 <= n
-            result -= n * (result >= n);
-        }
-    }
-    return result == 1;
 }
 
 __device__ bool fermatTest84(uint128_t n) {
@@ -259,14 +289,14 @@ __device__ bool fermatTest84(uint128_t n) {
     return result == 1;
 }
 
-__host__ __device__ uint64_t my_getMagic1(uint128_t mod)
+__host__ __device__ inline uint64_t my_getMagic1(uint128_t mod)
 {
 	// precomputes (2^128 - 1)/ mod    (a 64 bits number)
 	// !! THIS ONLY WORKS IF mod > 2^64, otherwise we would get overflow!
 	return (uint64_t) ((((uint128_t) 0) - 1) / mod);
 }
 
-__host__ __device__ uint128_t my_getMagic2(uint128_t mod, uint64_t magic1)
+__host__ __device__ inline uint128_t my_getMagic2(uint128_t mod, uint64_t magic1)
 {
 	// precomputes 2^96 % mod    (a 65 bits number)
 	//
@@ -346,7 +376,7 @@ __host__ __device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64
 #if !defined(EULER_CRITERION)
 #define EULER_CRITERION 1
 #endif
- __device__ bool fermatTest65(uint128_t n)
+ __device__ inline bool fermatTest65Inner(uint128_t n, uint64_t magic1)
 {
 
 	// - iterate on 64 bits before squaring would overflow 
@@ -368,7 +398,7 @@ __host__ __device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64
 	//   a few bits larger than the modulus
 	// - the last iteration is optimized out the loop
 	uint128_t result = result64;
-	uint64_t magic1 = my_getMagic1(n);
+	//uint64_t magic1 = my_getMagic1(n);
 	uint128_t magic2 = my_getMagic2(n, magic1);
 	while (bit > 1) {
 		// advance 2 bits at a time
@@ -424,16 +454,67 @@ __host__ __device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64
 	return result == expected;
 }
 
+// POTENTIAL OPTIMIZATION: REUSE MAGIC CALCULATIONS FOR MULTIPLE FERMAT TESTS
+
+__device__ bool fermatTest65(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
+    // estimate of magic1(n) is:  magicp - 2^128*d//p^2
+    // orig_magic should be precomputed as get_magic1(start)
+    // orig_derivative should be 2^128 / start^2
+    uint64_t magic1 = orig_magic - (uint64_t) (orig_derivative*delta); // this might be 1 more or 1 less than correct
+    uint128_t test = ((uint128_t) (magic1+1)) * n;
+    if (test >= n+n) magic1--;
+    if (test < n) magic1++;
+    // where d = n-p, aand 2^128/p^2 is precalculated as a double
+    return fermatTest65Inner(n, magic1);
+}
+
+__device__ bool fermatTest65Full(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
+    // all arguments other than n are unused - we just keep it the same format as fermatTest65
+    uint64_t magic1 = my_getMagic1(n);
+    return fermatTest65Inner(n, magic1);
+}
+
+
 
 __device__ void sieveSmallPrimes(uint32_t* sieve, uint32_t sieveLengthWords, uint128_t start,
-                                 uint32_t* smallPrimeWheel1, uint32_t* smallPrimeWheel2) {
+                                 uint32_t* smallPrimeWheel1, uint32_t* smallPrimeWheel2,
+                                 uint32_t* smallPrimeWheel3, uint32_t* smallPrimeWheel4) {
 
     // sieve should be in SHARED MEMORY for this function to work properly
+    int wheel1Idx = (start/WORD_LENGTH + threadIdx.x) % (7*11*13*17*19*23*29);
+#if (NUM_SMALL_PRIME_WHEELS >= 2)
+    int wheel2Idx = (start/WORD_LENGTH + threadIdx.x) % (31*37*41*43*47);
+#endif
+#if (NUM_SMALL_PRIME_WHEELS >= 3)
+    int wheel3Idx = (start/WORD_LENGTH + threadIdx.x) % (53*59*61*67);
+#endif
+#if (NUM_SMALL_PRIME_WHEELS >= 4)
+    int wheel4Idx = (start/WORD_LENGTH + threadIdx.x) % (71*73*79*83);
+#endif
     for (uint32_t i = threadIdx.x; i < sieveLengthWords; i += blockDim.x) {
-        uint128_t wordStart = start/WORD_LENGTH + i;
+        //uint128_t wordStart = start/WORD_LENGTH + i;
         // We cannot replace the atomicOr with a non-atomic operation, because that might skip sieving out some values
         // and we can't miss any because of pseudoprimes
-        atomicOr(&sieve[i], smallPrimeWheel1[wordStart % (7*11*13*17*19*23*29)]);
+        uint32_t mask = smallPrimeWheel1[wheel1Idx];
+        wheel1Idx += blockDim.x;
+        wheel1Idx = (wheel1Idx >= 7*11*13*17*19*23*29) ? (wheel1Idx - 7*11*13*17*19*23*29) : wheel1Idx;
+#if (NUM_SMALL_PRIME_WHEELS >= 2)
+        mask |= smallPrimeWheel2[wheel2Idx];
+        wheel2Idx += blockDim.x;
+        wheel2Idx = (wheel2Idx >= 31*37*41*43*47) ? (wheel2Idx - 31*37*41*43*47) : wheel2Idx;
+#endif
+#if (NUM_SMALL_PRIME_WHEELS >= 3)
+        mask |= smallPrimeWheel3[wheel3Idx];
+        wheel3Idx += blockDim.x;
+        wheel3Idx = (wheel3Idx >= 53*59*61*67) ? (wheel3Idx - 53*59*61*67) : wheel3Idx;
+#endif
+#if (NUM_SMALL_PRIME_WHEELS >= 4)
+        mask |= smallPrimeWheel4[wheel4Idx];
+        wheel4Idx += blockDim.x;
+        wheel4Idx = (wheel4Idx >= 71*73*79*83) ? (wheel4Idx - 71*73*79*83) : wheel4Idx;
+#endif
+
+        atomicOr(&sieve[i], mask);
     }
     __syncthreads();
 }
@@ -447,6 +528,10 @@ __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengt
         // TODO: I should be able to precalculate this entire thing
         // only need to precalculate (8 bits) * (# of sieving primes) words
         uint32_t startByte = (p * ((SIEVE_POS_TO_VALUE[bit] * pInv)%30)) / 30 + precalculated;
+#if (WORD_LENGTH == 240)
+        if (startByte % 2) startByte += p;
+        startByte /= 2;
+#endif
         if (startByte >= p) startByte -= p;
         uint32_t mask = 1 << bit;
         // TODO: THIS IS NOT SET UP FOR WORD_SIEVING_LENGTH > WORD_LENGTH
@@ -480,24 +565,8 @@ __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengt
 __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, uint128_t start,
                                   uint32_t* primeList, uint32_t primeCount) {
 #if SIEVE_BY_30
-    /*if (threadIdx.x < 64) {
-        uint32_t bitIdx = (threadIdx.x % 4)*2;
-        uint32_t p = primeList[threadIdx.x/4];
-        sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, p, bitIdx, 2);
-    } else if (threadIdx.x < 128) {
-        uint32_t bitIdx = (threadIdx.x % 2)*4;
-        uint32_t p = primeList[(threadIdx.x-64)/2 + 16];
-        sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, p, bitIdx, 4);
-    } else {
-        uint32_t p = primeList[threadIdx.x-80];
-        sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, p, 0, 8);
-    }
-    for (uint32_t pidx = threadIdx.x+blockDim.x-80; pidx < primeCount; pidx += blockDim.x) {
-        uint32_t p = primeList[pidx];
-        sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, p, 0, 8);
-    }*/
     uint32_t bitIdx, numBits, pIdx;
-    if (threadIdx.x < 64) { // the first 64 threads will split primes 31,37,41,43,47,53,59,61 into 8 threads/prime
+    if (threadIdx.x < 64) { // the first 64 threads will split primes 53,59,61,67,71,73,79,83 into 8 threads/prime
         bitIdx = (threadIdx.x % 8);
         numBits = 1;
         pIdx = threadIdx.x/8;
@@ -512,7 +581,7 @@ __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
     } else { // the remaining 320 threads each handle 1 prime by themselves
         bitIdx = 0;
         numBits = 8;
-        pIdx = threadIdx.x-136;
+        pIdx = threadIdx.x-SIEVING_DUPLICATED_PRIMES;
     }
     sieveMediumLargePrimesInner(sieve, sieveLengthWords, start, primeList[pIdx], bitIdx, numBits);
     
@@ -600,6 +669,7 @@ __device__ void sievePseudoprimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
 __device__ void sieveAll(uint32_t* globalSieve, uint128_t sieveStart, uint32_t sieveLengthWords,
                          uint32_t* primeList, uint32_t* rhoList, uint32_t primeCount,
                          uint32_t* smallPrimeWheel1, uint32_t* smallPrimeWheel2,
+                         uint32_t* smallPrimeWheel3, uint32_t* smallPrimeWheel4,
                          uint32_t numBlocks) {
     // the actual sieve length is WORD_LENGTH * sieveLengthWords
 
@@ -614,9 +684,14 @@ __device__ void sieveAll(uint32_t* globalSieve, uint128_t sieveStart, uint32_t s
     }
 
     __shared__ uint32_t sharedSieve[SHARED_SIZE_WORDS];
+    // We have to have each thread block run through consecutive shared memory blocks
+    // so that we can use the result from the previous shared block to cut down on computation for the next
+    // (THE ABOVE IS NOT IMPLEMENTED YET)
     uint32_t numSharedBlocks = sieveLengthWords / SHARED_SIZE_WORDS;
+    uint32_t firstSharedBlockIdx = (uint32_t) (((double) numSharedBlocks) * blockIdx.x / numBlocks);
+    uint32_t lastSharedBlockIdx = (uint32_t) (((double) numSharedBlocks) * (blockIdx.x+1) / numBlocks);
     
-    for (uint64_t sharedBlockIdx = blockIdx.x; sharedBlockIdx < numSharedBlocks; sharedBlockIdx += numBlocks) {
+    for (uint64_t sharedBlockIdx = firstSharedBlockIdx; sharedBlockIdx < lastSharedBlockIdx; sharedBlockIdx++) {
         // Reset the shared memory to 0, since it doesn't necessarily start out that way
         for (int idx=threadIdx.x; idx<SHARED_SIZE_WORDS; idx+=blockDim.x) {
             sharedSieve[idx] = 0;
@@ -627,7 +702,7 @@ __device__ void sieveAll(uint32_t* globalSieve, uint128_t sieveStart, uint32_t s
     // word idx 322375634
     // shared block number 26234 (start=21693774589723607040)
         sieveSmallPrimes(sharedSieve, SHARED_SIZE_WORDS, sieveStart + sharedBlockIdx*SHARED_SIZE_WORDS*WORD_LENGTH,
-                         smallPrimeWheel1, smallPrimeWheel2);
+                         smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4);
 #if RUN_TESTS
         bool good = true;
         if (threadIdx.x == 97 && (sieveStart + sharedBlockIdx*SHARED_SIZE_WORDS*WORD_LENGTH)%1000000000 == 723607040) {
@@ -655,9 +730,6 @@ __device__ void sieveAll(uint32_t* globalSieve, uint128_t sieveStart, uint32_t s
         for (int sharedIdx=threadIdx.x; sharedIdx<SHARED_SIZE_WORDS; sharedIdx += numBlocks) {
             atomicOr(&globalSieve[sharedBlockIdx*SHARED_SIZE_WORDS + sharedIdx], sharedSieve[sharedIdx]);
         }
-        if (sharedBlockIdx==0 && threadIdx.x == 0) {
-            //printf("values %u %u %u\n", sharedSieve[1000], sharedSieve[1001], sharedSieve[1002]);
-        }
     }
 
 #if 0
@@ -676,9 +748,10 @@ __device__ void sieveAll(uint32_t* globalSieve, uint128_t sieveStart, uint32_t s
 
 __global__ void kernel(uint32_t* globalSieve, uint128_t sieveStart, uint32_t sieveLengthWords,
                        uint32_t* primeList, uint32_t* rhoList, uint32_t primeCount,
-                       uint32_t* smallPrimeWheel1, uint32_t* smallPrimeWheel2) {
+                       uint32_t* smallPrimeWheel1, uint32_t* smallPrimeWheel2,
+                       uint32_t* smallPrimeWheel3, uint32_t* smallPrimeWheel4) {
     sieveAll(globalSieve, sieveStart, sieveLengthWords, primeList, rhoList, primeCount,
-        smallPrimeWheel1, smallPrimeWheel2, gridDim.x);
+        smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4, gridDim.x);
 }
 
 
@@ -726,7 +799,6 @@ __device__ uint128_t getNumberFromSieve(uint128_t start, int64_t bitPosition) {
     return start + bitPosition/32*WORD_LENGTH + SIEVE_POS_TO_VALUE[bitPosition%32];
 }
 
-#define FERMAT_TEST fermatTest65
 __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthWords, uint32_t startBlock, PrimeGap* resultList,
                          uint128_t* totalFirstPrime, uint128_t* totalLastPrime) {
     // sieve should be in GLOBAL MEMORY for this function to work properly
@@ -734,7 +806,6 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
     uint32_t blockIdxNew = blockIdx.x - startBlock;
 
     const int MIN_GAP_SIZE_BITS = (MIN_GAP_SIZE / WORD_LENGTH) * 32;
-    // one group of 30 numbers corresponds to 8 bits
 
     int64_t bitPosition;
     int64_t limitBitPosition;
@@ -748,12 +819,17 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
 
     bool hitEndOfRange = false;
     bitPosition = findNextUnsieved(sieve, sieveLengthWords, bitPosition);
-    
 
     // Calculate the first prime in the range
     uint128_t lastPrime = getNumberFromSieve(start, bitPosition);
+    const uint128_t firstPrime = lastPrime;
+    
+    double orig_derivative = 1.0 / firstPrime / firstPrime * 4294967296.0 * 4294967296.0 * 4294967296.0 * 4294967296.0;
+    uint64_t orig_magic = my_getMagic1(firstPrime);
 
-    while (!FERMAT_TEST(lastPrime)) {
+
+    while (!FERMAT_TEST(lastPrime, (uint32_t) (lastPrime-firstPrime), orig_magic, orig_derivative)) {
+
         if (bitPosition == END_OF_RANGE) {
             // this will only happen if the last thread doesn't have a single prime in it
             // which will almost certainly never happen (would require a gap of >1M)
@@ -781,7 +857,7 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
             do {
                 bitPosition = findPrevUnsieved(sieve, sieveLengthWords, --bitPosition);
                 lastPrime = getNumberFromSieve(start, bitPosition);
-            } while (!FERMAT_TEST(lastPrime));
+            } while (!FERMAT_TEST(lastPrime, (uint32_t) (lastPrime-firstPrime), orig_magic, orig_derivative));
             *totalLastPrime = lastPrime;
             break;
         }
@@ -791,7 +867,7 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
             bitPosition += MIN_GAP_SIZE_BITS;
             bitPosition = findNextUnsieved(sieve, sieveLengthWords, bitPosition);
             uint128_t upperPrime = getNumberFromSieve(start, bitPosition);
-            while (!FERMAT_TEST(upperPrime)) {
+            while (!FERMAT_TEST(upperPrime, (uint32_t) (upperPrime-firstPrime), orig_magic, orig_derivative)) {
                 if (bitPosition == END_OF_RANGE) {
                     *totalLastPrime = lastPrime;
                     goto endLabel;
@@ -808,16 +884,18 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
             lastPrime = upperPrime;
             bitPosition += MIN_GAP_SIZE_BITS;
         } else {
-            isPrime = FERMAT_TEST(toTest);
+            isPrime = FERMAT_TEST(toTest, (uint32_t) (toTest-firstPrime), orig_magic, orig_derivative);
             if (isPrime) lastPrime = toTest;
         }
 
         if (bitPosition >= limitBitPosition && isPrime) break;
+
         bitPosition += MIN_GAP_SIZE_BITS * isPrime;
         // for some reason, it doesn't work if I just put this in the while loop condition
     }
 
     endLabel:
+    
     __syncthreads();
 }
 
@@ -831,11 +909,12 @@ __global__ void kernel2(uint32_t* globalSieve, uint128_t sieveStart, uint64_t si
 __global__ void kernelBoth(uint32_t* globalSieve1, uint32_t* globalSieve2, uint128_t sieveStart, uint32_t sieveLengthWords,
                            uint32_t* primeList, uint32_t* rhoList, uint32_t primeCount,
                            uint32_t* smallPrimeWheel1, uint32_t* smallPrimeWheel2,
+                           uint32_t* smallPrimeWheel3, uint32_t* smallPrimeWheel4,
                            uint32_t numSieveBlocks, PrimeGap* resultList,
                            uint128_t* firstPrimeInBlock, uint128_t* lastPrimeInBlock) {
     if (blockIdx.x < numSieveBlocks) {
         sieveAll(globalSieve1, sieveStart, sieveLengthWords, primeList, rhoList, primeCount,
-            smallPrimeWheel1, smallPrimeWheel2, numSieveBlocks);
+            smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4, numSieveBlocks);
     } else {
         findGaps(globalSieve2, sieveStart - ((uint128_t) sieveLengthWords)*WORD_LENGTH, sieveLengthWords, numSieveBlocks,
                  resultList, firstPrimeInBlock, lastPrimeInBlock);
@@ -875,21 +954,40 @@ bool fermatTest84CPU(uint128_t n, uint32_t base) {
     return result == 1;
 }
 
-bool isPrime84(uint128_t n) {
+bool fermatTest84CPUStrong(uint128_t n, uint32_t base) {
+    uint128_t m = n-1;
+    int zeros = 0;
+    while (m % 2 == 0) {
+        m /= 2;
+        zeros++;
+    }
+    uint128_t result = 1;
+    for (int bit=84; bit>=1; bit--) {
+        if ((n >> bit) & 1) {
+            result = (result * base) % n; // with base=2 this can be simplified but we might use base>2
+        }
+        if (bit == zeros && result == 1) return true;
+        if (bit <= zeros && result == n-1) return true;
+        result = squareMod84CPU(result, n);
+    }
+    return false;
+}
+
+bool isPrime84(uint128_t n) { // deterministic up to at least 2^78
     return (
         n%3 && n%5 && n%7 && n&11 && n&13 && n&17 && n&19 && n&23 &&
-        fermatTest84CPU(n, 2) && 
-        fermatTest84CPU(n, 3) && 
-        fermatTest84CPU(n, 5) && 
-        fermatTest84CPU(n, 7) && 
-        fermatTest84CPU(n, 11) && 
-        fermatTest84CPU(n, 13) && 
-        fermatTest84CPU(n, 17) && 
-        fermatTest84CPU(n, 19) && 
-        fermatTest84CPU(n, 23) && 
-        fermatTest84CPU(n, 29) && 
-        fermatTest84CPU(n, 31) && 
-        fermatTest84CPU(n, 37)
+        fermatTest84CPUStrong(n, 2) && 
+        fermatTest84CPUStrong(n, 3) && 
+        fermatTest84CPUStrong(n, 5) && 
+        fermatTest84CPUStrong(n, 7) && 
+        fermatTest84CPUStrong(n, 11) && 
+        fermatTest84CPUStrong(n, 13) && 
+        fermatTest84CPUStrong(n, 17) && 
+        fermatTest84CPUStrong(n, 19) && 
+        fermatTest84CPUStrong(n, 23) && 
+        fermatTest84CPUStrong(n, 29) && 
+        fermatTest84CPUStrong(n, 31) && 
+        fermatTest84CPUStrong(n, 37)
     );
 }
 
@@ -994,71 +1092,6 @@ std::vector<uint32_t> generateRhoList(uint32_t limit, uint32_t* sieve, std::vect
     return rhos;
 }
 
-void cpuFindGapAround(uint128_t n, uint32_t minGap) {
-    uint128_t p1 = n;
-    p1 -= 1 - (p1 % 2);
-    while (!isPrime84(p1)) {p1 -= 2;}
-
-    uint128_t p2 = n;
-    p2 += 1 - (p2 % 2);
-    while (!isPrime84(p2)) {p2 += 2;}
-
-    int gap = (int) (p2-p1);
-    if (gap >= minGap) {
-        printf("%lu%019lu %lu%019lu %d\n",
-               hi19(p1), lo19(p1),
-               hi19(p2), lo19(p2), gap);
-    }
-}
-
-
-
-
-
-
-
-
-
-
-__global__ void sievePseudoprimesSeparate(uint128_t start, uint64_t sieveLengthWords,
-                                          uint32_t* primeList, uint32_t* rhoList, uint32_t primeCount) {
-    uint32_t tidx = blockIdx.x * blockDim.x + threadIdx.x;
-    uint32_t stride = blockDim.x * gridDim.x;
-
-    for (uint32_t pidx = tidx; pidx < primeCount; pidx += stride) {
-        uint32_t p = primeList[pidx];
-        uint32_t rho = rhoList[pidx];
-        uint64_t pTimesRho = ((uint64_t) p) * rho;
-        pTimesRho <<= pTimesRho % 2; // if it's odd, multiply it by 2 - TODO: PRECOMPUTE THIS IN RHO??
-        //x = ((start - p) / pTimesRho + 1) * pTimesRho - start;
-        uint64_t position = pTimesRho + p - (start % pTimesRho);
-        position -= pTimesRho * (position > pTimesRho);
-        
-        uint64_t currentWord = position / WORD_LENGTH; // this needs to be 64 bit
-        uint32_t currentPosInWord = position % WORD_LENGTH;
-        while (currentWord < sieveLengthWords) {
-            if (IS_COPRIME_30[(currentPosInWord % 30) / 2]) {
-                uint128_t num = start + ((uint128_t) currentWord)*WORD_LENGTH + currentPosInWord;
-                if (num%7 && num%11 && num%13 && num%17 && num%19 && num%23 && num%29 && num%31) {
-                    if (FERMAT_TEST(num)) {
-                        printBigNum(num);
-                        //printf("Pseudoprime p=%d mod 1e19=%lu %lu %u %u\n", p, (uint64_t) (num % 10000000000000000000UL),
-                        //currentWord, currentPosInWord, (uint32_t) (num%p));
-                        //printf("20000%lu\n", (uint64_t) (num % 10000000000000000000UL));
-                    }
-                }
-            }
-            
-
-            // Find the next position
-            currentPosInWord += pTimesRho % WORD_LENGTH;
-            currentWord += (uint64_t) (pTimesRho / WORD_LENGTH) + (currentPosInWord >= WORD_LENGTH);
-            currentPosInWord -= WORD_LENGTH * (currentPosInWord >= WORD_LENGTH);
-        }
-    }
-}
-
-
 uint128_t atouint128_t(const char *s) {
     // https://stackoverflow.com/questions/45608424/atoi-for-int128-t-type
     const char *p = s;
@@ -1093,6 +1126,9 @@ void initInverseArray() {
 }
 
 void printGap(uint128_t startPrime, uint128_t endPrime) {
+#if RUN_TESTS
+    return;
+#endif
     uint32_t gap = endPrime-startPrime;
     std::string suffix = "";
     int missing[] = {1432,1444,1458,1472,1474,1478,1484,1492,1496,1498,1500,1504,1508,1512,1514,1516,1518,1520,1522,
@@ -1107,30 +1143,43 @@ void printGap(uint128_t startPrime, uint128_t endPrime) {
             }
         }
     }
-    printf("%lu%019lu %lu%019lu %u%s\n",
-            hi19(startPrime), lo19(startPrime),
-            hi19(endPrime), lo19(endPrime), gap, suffix.c_str());
+
+    printf("%lu%019lu %u %.6f%s\n", hi19(startPrime), lo19(startPrime), gap, gap/log(startPrime), suffix.c_str());
+}
+
+void cpuFindGapAround(uint128_t n, uint32_t minGap) {
+    uint128_t p1 = n;
+    p1 -= 1 - (p1 % 2);
+    while (!isPrime84(p1)) {p1 -= 2;}
+
+    uint128_t p2 = n;
+    p2 += 1 - (p2 % 2);
+    while (!isPrime84(p2)) {p2 += 2;}
+
+    int gap = (int) (p2-p1);
+    if (gap >= minGap) {
+        printGap(p1, p2);
+    }
 }
 
 void checkGapAndPrint(uint128_t startPrime, uint128_t endPrime) {
     uint128_t lastPrime = startPrime;
-    uint128_t test = startPrime + MIN_GAP_SIZE;
+    uint128_t test = startPrime + MIN_GAP_SIZE - 2;
     while (lastPrime <= endPrime - MIN_GAP_SIZE) {
-        if (test % WORD_LENGTH >= WORD_SIEVING_LENGTH && isPrime84(test)) {
+        if (isPrime84(test)) {
             lastPrime = test;
             test += MIN_GAP_SIZE-2;
         } else {
             test -= 2;
             if (test == lastPrime) {
                 test += MIN_GAP_SIZE;
-                while (!(test % WORD_LENGTH >= WORD_SIEVING_LENGTH && isPrime84(test))) {
+                while (!isPrime84(test)) {
                     test += 2;
                 }
                 printGap(lastPrime, test);
                 lastPrime = test;
             }
         }
-        //if (startPrime % 1000000 == 830099) printf("    currently at mod1M=%d\n", (uint32_t) (test%100000000));
     }
 }
 
@@ -1149,6 +1198,25 @@ void displayResultsAndClear(PrimeGap* resultList) {
         resultList[i].gap = 0;
     }
     resultList[0].gap = 0;
+}
+
+std::chrono::_V2::system_clock::time_point printProgress(
+    std::chrono::_V2::system_clock::time_point start,
+    std::chrono::_V2::system_clock::time_point lastFinish,
+    uint128_t sieveStart, int i
+) {
+    auto finish = std::chrono::high_resolution_clock::now();
+    double totalSecs = std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count()/1e9;
+    double lastSecs = std::chrono::duration_cast<std::chrono::nanoseconds>(finish-lastFinish).count()/1e9;
+    double speed = BLOCK_SIZE * PROGRESS_UPDATE_BLOCKS / lastSecs;
+    int speedLog10 = log10(speed);
+    if (i) {
+        printf("Done %d blocks (limit=%lu%019lu, time=%f seconds, speed=%.3fe%d/sec)\n",
+            i, hi19(sieveStart), lo19(sieveStart), totalSecs, speed/pow(10,speedLog10), speedLog10);
+    } else {
+        printf("Done %d blocks (limit=%lu%019lu, time=%f seconds)\n", i, hi19(sieveStart), lo19(sieveStart), totalSecs);
+    }
+    return finish;
 }
 
 
@@ -1227,12 +1295,16 @@ int main(int argc, char* argv[]) {
 
     uint32_t* smallPrimeWheel1;
     uint32_t* smallPrimeWheel2;
+    uint32_t* smallPrimeWheel3;
+    uint32_t* smallPrimeWheel4;
     cudaMalloc((void **) &smallPrimeWheel1, (7*11*13*17*19*23*29) * sizeof(uint32_t));
     cudaMalloc((void **) &smallPrimeWheel2, (31*37*41*43*47) * sizeof(uint32_t));
+    cudaMalloc((void **) &smallPrimeWheel3, (53*59*61*67) * sizeof(uint32_t));
+    cudaMalloc((void **) &smallPrimeWheel4, (71*73*79*83) * sizeof(uint32_t));
     printf("Making small prime sieve\n");
     
     auto start1 = std::chrono::high_resolution_clock::now();
-    makeSmallPrimeWheels<<<96,512>>>(smallPrimeWheel1, smallPrimeWheel2);
+    makeSmallPrimeWheels<<<96,512>>>(smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4);
     auto finish1 = std::chrono::high_resolution_clock::now();
     std::cout << "Done in " << std::chrono::duration_cast<std::chrono::nanoseconds>(finish1-start1).count()/1e9 << " seconds\n";
    
@@ -1273,7 +1345,7 @@ int main(int argc, char* argv[]) {
     kernel<<<96,512>>>(
         globalSieve1, sieveStart, (uint32_t) sieveLengthWords,
         primeListCuda, rhoListCuda, primeList.size(),
-        smallPrimeWheel1, smallPrimeWheel2
+        smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4
     );
     cudaDeviceSynchronize();
 
@@ -1296,33 +1368,30 @@ int main(int argc, char* argv[]) {
 #endif
     auto start = std::chrono::high_resolution_clock::now();
     auto finish = start;
-    auto lastFinish = start;
+    cpuFindGapAround(sieveStart, MIN_GAP_SIZE);
     for (int i=0; i<blocksToTest-1; i++) {
         if (i%PROGRESS_UPDATE_BLOCKS == 0) {
-            finish = std::chrono::high_resolution_clock::now();
-            double totalSecs = std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count()/1e9;
-            double lastSecs = std::chrono::duration_cast<std::chrono::nanoseconds>(finish-lastFinish).count()/1e9;
-            double speed = BLOCK_SIZE * PROGRESS_UPDATE_BLOCKS / lastSecs;
-            int speedLog10 = log10(speed);
-            if (i) {
-                printf("Done %d blocks (limit=%lu%019lu, time=%f seconds, speed=%.3fe%d/sec)\n",
-                    i, hi19(sieveStart), lo19(sieveStart), totalSecs, speed/pow(10,speedLog10), speedLog10);
-            } else {
-                printf("Done %d blocks (limit=%lu%019lu, time=%f seconds)\n", i, hi19(sieveStart), lo19(sieveStart), totalSecs);
-            }
-            lastFinish = finish;
+            finish = printProgress(start, finish, sieveStart, i);
         }
         cudaMemset(globalSieve2, 0, sieveLengthWords * sizeof(uint32_t));
         
         kernelBoth<<<192,512>>>(
             globalSieve2, globalSieve1, sieveStart+sieveLength, (uint32_t) sieveLengthWords,
             primeListCuda, rhoListCuda, primeList.size(),
-            smallPrimeWheel1, smallPrimeWheel2, 144,
+            smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4, 144,
             resultList, firstPrimeInBlock, lastPrimeInBlock
         );
         
 #if RUN_TESTS
         if (i == 0) {
+            /*
+            With wordsize=240, the following changes need to be made to the testing:
+            Start 46.08e9 earlier
+            The global sieve index changes from 322375634 to 322375634/2 + 46080000000/240
+            The target bitmask after PSP sieving changes from 1834999230 to 2801754046
+            Before PSP, it changes from 1834868158 to 2801753534
+            Number of resulting gaps chaanges to 52,37,49 for the 3 blocks
+            */
             uint32_t val;
             cudaMemcpy(&val, globalSieve2+322375634, sizeof(uint32_t), cudaMemcpyDeviceToHost);
             if (val != 1834999230) {printf("FAILED PSP TEST IN KERNEL 2 %u\n", val);}
@@ -1332,9 +1401,7 @@ int main(int argc, char* argv[]) {
         cudaDeviceSynchronize();
         
         if (lastPrimeInLastBlock && (*firstPrimeInBlock - lastPrimeInLastBlock >= MIN_GAP_SIZE)) {
-            printf("%lu%019lu %lu%019lu %d\n",
-               hi19(lastPrimeInLastBlock), lo19(lastPrimeInLastBlock),
-               hi19(*firstPrimeInBlock), lo19(*firstPrimeInBlock), (uint32_t) (*firstPrimeInBlock - lastPrimeInLastBlock));
+            printGap(lastPrimeInLastBlock, *firstPrimeInBlock);
         }
         lastPrimeInLastBlock = *lastPrimeInBlock;
 #if RUN_TESTS
@@ -1348,17 +1415,10 @@ int main(int argc, char* argv[]) {
     }
 
     if ((blocksToTest-1)%PROGRESS_UPDATE_BLOCKS == 0) {
-        finish = std::chrono::high_resolution_clock::now();
-        printf("Done %d blocks (limit=%lu%019lu time=%f seconds)\n", blocksToTest-1, hi19(sieveStart), lo19(sieveStart),
-            std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count()/1e9);
+        finish = printProgress(start, finish, sieveStart, blocksToTest-1);
     }
 
-    for (int i=0; i<RESULT_LIST_SIZE; i++) {
-        resultList[i].startPrime = 0;
-        resultList[i].gap = 0;
-    }
     kernel2<<<96,256>>>(globalSieve1, sieveStart, sieveLengthWords, resultList, firstPrimeInBlock, lastPrimeInBlock);
-    cpuFindGapAround(sieveStart, MIN_GAP_SIZE - (MIN_GAP_SIZE % WORD_LENGTH));
     cudaDeviceSynchronize();
 #if RUN_TESTS
     assert(resultList[0].gap == 12); // only 12 gaps of size >=720 in this block, a lot less than expected
@@ -1366,9 +1426,7 @@ int main(int argc, char* argv[]) {
     displayResultsAndClear(resultList);
     sieveStart += sieveLength;
 
-    finish = std::chrono::high_resolution_clock::now();
-    printf("Done %d blocks (limit=%lu%019lu time=%f seconds)\n", blocksToTest, hi19(sieveStart), lo19(sieveStart),
-        std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count()/1e9);
+    finish = printProgress(start, finish, sieveStart, blocksToTest);
 
     return 0;
 }
@@ -1376,18 +1434,16 @@ int main(int argc, char* argv[]) {
 /*
 - General tips:
     - Don't be afraid to UNROLL LOOPS!
-    - Remember to __syncthreads() between each step!
+    - Inline functions?
     - We need to use an AtomicOr function on ALL STEPS!!! Because some blocks might be in a different step than others!
         - This includes the shared memory step, because we cannot miss any bits with sieving small primes due to PSPs
-    - Maximum amount of shared memory per block is 49152 bytes, or 12288 ints
-    - Maximum amount of constant memory is 65536 bytes, or 16384 ints
 
 THINGS TO ADD:
 
 settings/worktodo files: (should put this in the readme at some point)
 
 === settings.txt file format: ===
-# comment: there should be a script to automatically find the optimal parameters to set
+# comment: there should be a script to automatically find the optimal parameters to set (far future)
 GPU_BLOCKS=192
 NUM_BLOCKS_FOR_SIEVING=120
 GPU_THREADS=512
@@ -1401,7 +1457,7 @@ NAME=B.Kehrig
 
 === output file format: === (location: output/gaps_<start>e12_<end>e12_min<mingap>_<name>.txt)
 ===== PRIME GAP REPORT =====
-Minimum gap size: <mingap>
+Target gap size: <mingap>
 Gaps >=1200: <x> (or whatever hundred is at least as large as mingap)
 Gaps >=1300: <x>
 ... keep going until there are none left
