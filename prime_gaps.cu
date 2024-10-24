@@ -18,7 +18,7 @@
 
 #define count_set_bits_64 __builtin_popcountll
 
-#define uint128_t unsigned __int128
+typedef unsigned __int128 uint128_t;
 
 #define WIPE_LINE "\r\033[K"
 #define END_OF_RANGE ~0
@@ -123,7 +123,7 @@ __constant__ uint32_t INVERSES_30[15] = {
 #else
 #define SHARED_SIZE_WORDS 8192
 #define NUM_MEDIUM_PRIMES (3584 - SIEVING_DUPLICATED_PRIMES)
-#define NUM_SMALL_PRIME_WHEELS 3 // this shouldn't be higher than 4
+#define NUM_SMALL_PRIME_WHEELS 4 // this shouldn't be higher than 4
 #endif
 
 #if (NUM_SMALL_PRIME_WHEELS == 1)
@@ -135,6 +135,15 @@ __constant__ uint32_t INVERSES_30[15] = {
 #elif (NUM_SMALL_PRIME_WHEELS == 4)
 #define NUM_SMALL_PRIMES 23
 #endif
+
+void handleError(cudaError_t err, const char *file, int line) {
+    // from "CUDA By Example"
+    if (err != cudaSuccess) {
+        printf("Error: '%s' in %s at line %d\n", cudaGetErrorString(err), file, line);
+        exit(1);
+    }
+}
+#define HANDLE_ERROR(err) (handleError(err, __FILE__, __LINE__))
 
 struct PrimeGap {
     uint128_t startPrime;
@@ -164,6 +173,7 @@ __device__ uint32_t getSmallMask(uint32_t prime, uint64_t wordOffset) {
 
 
 __global__ void makeSmallPrimeWheels(uint32_t* wheel1, uint32_t* wheel2, uint32_t* wheel3, uint32_t* wheel4) {
+    // We still make all 4 wheels, even if we don't end up using all of them (NUM_SMALL_PRIME_WHEELS)
     uint32_t tidx = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t stride = blockDim.x * gridDim.x;
 
@@ -236,7 +246,7 @@ __host__ __device__ uint64_t hi19(uint128_t n) {
 }
 
 __device__ void printBigNum(uint128_t num) {
-    // works up to 10^38
+    // works with numbers between 10^19 and 10^38
     printf("%lu%019lu\n", hi19(num), lo19(num));
 }
 
@@ -287,6 +297,10 @@ __device__ bool fermatTest84(uint128_t n) {
         result = squareMod84(result, n, magic);
     }
     return result == 1;
+}
+
+__device__ bool fermatTest84(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
+    return fermatTest84(n);
 }
 
 __host__ __device__ inline uint64_t my_getMagic1(uint128_t mod)
@@ -376,7 +390,7 @@ __host__ __device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64
 #if !defined(EULER_CRITERION)
 #define EULER_CRITERION 1
 #endif
- __device__ inline bool fermatTest65Inner(uint128_t n, uint64_t magic1)
+__host__  __device__ inline bool fermatTest65Inner(uint128_t n, uint64_t magic1)
 {
 
 	// - iterate on 64 bits before squaring would overflow 
@@ -456,19 +470,24 @@ __host__ __device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64
 
 // POTENTIAL OPTIMIZATION: REUSE MAGIC CALCULATIONS FOR MULTIPLE FERMAT TESTS
 
-__device__ bool fermatTest65(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
+__host__ __device__ bool fermatTest65(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
     // estimate of magic1(n) is:  magicp - 2^128*d//p^2
     // orig_magic should be precomputed as get_magic1(start)
     // orig_derivative should be 2^128 / start^2
-    uint64_t magic1 = orig_magic - (uint64_t) (orig_derivative*delta); // this might be 1 more or 1 less than correct
-    uint128_t test = ((uint128_t) (magic1+1)) * n;
-    if (test >= n+n) magic1--;
-    if (test < n) magic1++;
+    uint64_t magic = orig_magic - (uint64_t) (orig_derivative*delta); // this might be 1 more or 1 less than correct
+    uint128_t test = ((uint128_t) (magic+2)) * n;
+    /*if (test >= n+n+n) {
+        printf("BAD FERMAT TEST: n=%lu%019lu, delta=%u orig_magic=%lu orig_derivative=%f magic=%lu test=%lu%019lu\n",
+            hi19(n), lo19(n), delta, orig_magic, orig_derivative, magic, hi19(test), lo19(test));
+        assert(false);
+    }*/
+    if (test >= n+n) magic--;// TODO: CAN WE JUST GET RID OF THESE?
+    if (test < n) magic++;
     // where d = n-p, aand 2^128/p^2 is precalculated as a double
-    return fermatTest65Inner(n, magic1);
+    return fermatTest65Inner(n, magic);
 }
 
-__device__ bool fermatTest65Full(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
+__host__ __device__ bool fermatTest65Full(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
     // all arguments other than n are unused - we just keep it the same format as fermatTest65
     uint64_t magic1 = my_getMagic1(n);
     return fermatTest65Inner(n, magic1);
@@ -534,7 +553,6 @@ __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengt
 #endif
         if (startByte >= p) startByte -= p;
         uint32_t mask = 1 << bit;
-        // TODO: THIS IS NOT SET UP FOR WORD_SIEVING_LENGTH > WORD_LENGTH
         for (int32_t byte=startByte; byte<sieveLengthWords*4; byte += p) {
             atomicOr(&sieve[byte/4], mask << ((byte%4)*8));
         }
@@ -567,15 +585,15 @@ __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
                                   uint32_t* primeList, uint32_t primeCount) {
 #if SIEVE_BY_30
     uint32_t bitIdx, numBits, pIdx;
-    if (threadIdx.x < 64) { // the first 64 threads will split primes 53,59,61,67,71,73,79,83 into 8 threads/prime
+    if (threadIdx.x < 64) { // the first 64 threads will split primes 71,73,79,83,89,97,101,103 into 8 threads/prime
         bitIdx = (threadIdx.x % 8);
         numBits = 1;
         pIdx = threadIdx.x/8;
-    } else if (threadIdx.x < 128) { // the next 64 threads will split the 16 primes 67-139 into 4 threads/prime
+    } else if (threadIdx.x < 128) { // the next 64 threads will split the 16 primes 107-191 into 4 threads/prime
         bitIdx = (threadIdx.x % 4)*2;
         numBits = 2;
         pIdx = (threadIdx.x-64)/4 + 8;
-    } else if (threadIdx.x < 192) { // 32 primes 149-317 will get 2 threads/prime
+    } else if (threadIdx.x < 192) { // 32 primes 193-379 will get 2 threads/prime
         bitIdx = (threadIdx.x % 2)*4;
         numBits = 4;
         pIdx = (threadIdx.x-128)/2 + 8+16;
@@ -1025,6 +1043,7 @@ void deviceInfo() {
         printf("  Number of multiprocessors: %d\n",prop.multiProcessorCount);
         printf("  minor-major: %d-%d\n", prop.minor, prop.major);
         printf("  Warp-size: %d\n", prop.warpSize);
+        printf("  L2 cache size: %d\n", prop.l2CacheSize);
         printf("  Concurrent kernels: %s\n", prop.concurrentKernels ? "yes" : "no");
         printf("  Concurrent computation/communication: %s\n\n",prop.deviceOverlap ? "yes" : "no");
     }
@@ -1107,6 +1126,7 @@ uint128_t atouint128_t(const char *s) {
 int gcd(int a, int b) {
     // https://www.geeksforgeeks.org/gcd-in-cpp/
     // std::gcd might not be available in older c++ versions, so this is mainly for compatibility
+    // this is not a good algorithm in the general case but it is fine when 1 of the numbers is small
     int result = min(a, b);
     while (result > 0) {
         if (a % result == 0 && b % result == 0) {
@@ -1131,11 +1151,7 @@ void initInverseArray() {
             }
         }
     }
-    auto err = cudaMemcpyToSymbol(WORD_INVERSES, inverses, sizeof(uint32_t)*(WORD_LENGTH/2), 0, cudaMemcpyHostToDevice);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Failed to allocate memory for inverses: %s\n", cudaGetErrorString(err));
-        exit(1);
-    }
+    HANDLE_ERROR(cudaMemcpyToSymbol(WORD_INVERSES, inverses, sizeof(uint32_t)*(WORD_LENGTH/2), 0, cudaMemcpyHostToDevice));
 }
 
 void printGap(uint128_t startPrime, uint128_t endPrime) {
@@ -1145,7 +1161,7 @@ void printGap(uint128_t startPrime, uint128_t endPrime) {
     uint32_t gap = endPrime-startPrime;
     std::string suffix = "";
     int missing[] = {1432,1444,1458,1472,1474,1478,1484,1492,1496,1498,1500,1504,1508,1512,1514,1516,1518,1520,1522,
-                     1524,1528,1532,1534,1536,1538,1540,1542,1544,1546,1548,1554,1556,1558,1560,1562,1564,1566,1568,1570};
+                     1524,1528,1532,1534,1536,1538,1542,1544,1546,1548,1554,1556,1558,1560,1562,1564,1566,1568,1570};
     if (gap > 1572) {
         suffix = " MAXIMAL";
     } else {
@@ -1232,6 +1248,21 @@ std::chrono::_V2::system_clock::time_point printProgress(
     return finish;
 }
 
+void tests() {
+    uint128_t firstPrime = 9523372036854775808UL;
+    firstPrime *= 2;
+    double orig_derivative = 1.0 / firstPrime / firstPrime * 4294967296.0 * 4294967296.0 * 4294967296.0 * 4294967296.0 - 0.00000000001;
+    uint64_t orig_magic = my_getMagic1(firstPrime);
+    for (uint128_t p = firstPrime+2; p<firstPrime+4294967296; p+=20000) {
+        if (fermatTest65Full(p, (uint32_t)(p-firstPrime), orig_magic, orig_derivative) !=
+            fermatTest65(p, (uint32_t)(p-firstPrime), orig_magic, orig_derivative)) {
+            printf("Bad %lu\n", (uint64_t) (p%10000000000));
+        }
+    }
+    exit(1);
+}
+
+
 
 int main(int argc, char* argv[]) {
     setbuf(stdout, NULL);
@@ -1256,25 +1287,20 @@ int main(int argc, char* argv[]) {
     std::vector<uint32_t> primeList = generateSmallPrimesList(SMALL_PRIME_LIMIT, smallSieve);
     std::vector<uint32_t> rhoList = generateRhoList(SMALL_PRIME_LIMIT, smallSieve, primeList);
     printf("Done generating primes below %u\n", SMALL_PRIME_LIMIT);
+    if (primeList.size() != 348513) {
+        printf("WRONG SIZE! Got %lu, expected %d\n", primeList.size(), 348513);
+    }
     delete smallSieve;
 
     uint32_t* primeListCuda;
-    auto err = cudaMallocManaged(&primeListCuda, primeList.size() * sizeof(uint32_t));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Failed to allocate managed memory: %s\n", cudaGetErrorString(err));
-        exit(1);
-    }
+    HANDLE_ERROR(cudaMallocManaged(&primeListCuda, primeList.size() * sizeof(uint32_t)));
     uint32_t* rhoListCuda;
-    err = cudaMallocManaged(&rhoListCuda, rhoList.size() * sizeof(uint32_t));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Failed to allocate managed memory: %s\n", cudaGetErrorString(err));
-        exit(1);
-    }
+    HANDLE_ERROR(cudaMallocManaged(&rhoListCuda, rhoList.size() * sizeof(uint32_t)));
+
     for (int i=0; i<primeList.size(); i++) {
         primeListCuda[i] = primeList[i];
         rhoListCuda[i] = rhoList[i];
     }
-
 
     // pseudoprime is 21693774589725076147 (67 mod 120), with start 21693774589725076080
     // first kilogap above that is 21693776423220625951-6953, or 1833495550873=1.8e12 larger
@@ -1316,10 +1342,10 @@ int main(int argc, char* argv[]) {
     uint32_t* smallPrimeWheel2;
     uint32_t* smallPrimeWheel3;
     uint32_t* smallPrimeWheel4;
-    cudaMalloc((void **) &smallPrimeWheel1, (7*11*13*17*19*23*29) * sizeof(uint32_t));
-    cudaMalloc((void **) &smallPrimeWheel2, (31*37*41*43*47) * sizeof(uint32_t));
-    cudaMalloc((void **) &smallPrimeWheel3, (53*59*61*67) * sizeof(uint32_t));
-    cudaMalloc((void **) &smallPrimeWheel4, (71*73*79*83) * sizeof(uint32_t));
+    HANDLE_ERROR(cudaMalloc((void **) &smallPrimeWheel1, (7*11*13*17*19*23*29) * sizeof(uint32_t)));
+    HANDLE_ERROR(cudaMalloc((void **) &smallPrimeWheel2, (31*37*41*43*47) * sizeof(uint32_t)));
+    HANDLE_ERROR(cudaMalloc((void **) &smallPrimeWheel3, (53*59*61*67) * sizeof(uint32_t)));
+    HANDLE_ERROR(cudaMalloc((void **) &smallPrimeWheel4, (71*73*79*83) * sizeof(uint32_t)));
     printf("Making small prime sieve\n");
     
     auto start1 = std::chrono::high_resolution_clock::now();
@@ -1327,41 +1353,24 @@ int main(int argc, char* argv[]) {
     auto finish1 = std::chrono::high_resolution_clock::now();
     std::cout << "Done in " << std::chrono::duration_cast<std::chrono::nanoseconds>(finish1-start1).count()/1e9 << " seconds\n";
    
+    // here is where we could run tests for small prime wheels
+
     PrimeGap* resultList;
     PrimeGap resultListHost[RESULT_LIST_SIZE];
-    err = cudaMalloc((void **) &resultList, sizeof(PrimeGap) * RESULT_LIST_SIZE);
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Failed to allocate memory for the result list: %s\n", cudaGetErrorString(err));
-        exit(1);
-    }
-    cudaMemset(resultList, 0, RESULT_LIST_SIZE * sizeof(PrimeGap));
+    HANDLE_ERROR(cudaMalloc((void **) &resultList, sizeof(PrimeGap) * RESULT_LIST_SIZE));
+    HANDLE_ERROR(cudaMemset(resultList, 0, RESULT_LIST_SIZE * sizeof(PrimeGap)));
     
     uint32_t* globalSieve1;
     uint32_t* globalSieve2;
-    err = cudaMalloc((void **) &globalSieve1, sieveLengthWords * sizeof(uint32_t));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Failed to allocate memory for the sieve: %s\n", cudaGetErrorString(err));
-        exit(1);
-    }
-    err = cudaMalloc((void **) &globalSieve2, sieveLengthWords * sizeof(uint32_t));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Failed to allocate memory for the sieve: %s\n", cudaGetErrorString(err));
-        exit(1);
-    }
+    HANDLE_ERROR(cudaMalloc((void **) &globalSieve1, sieveLengthWords * sizeof(uint32_t)));
+    HANDLE_ERROR(cudaMalloc((void **) &globalSieve2, sieveLengthWords * sizeof(uint32_t)));
+
     uint128_t* firstPrimeInBlock;
     uint128_t* lastPrimeInBlock;
-    err = cudaMallocManaged((void **) &firstPrimeInBlock, sizeof(uint128_t));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Failed to allocate memory for the first/last primes: %s\n", cudaGetErrorString(err));
-        exit(1);
-    }
-    err = cudaMallocManaged((void **) &lastPrimeInBlock, sizeof(uint128_t));
-    if (err != cudaSuccess) {
-        fprintf(stderr, "Failed to allocate memory for the first/last primes: %s\n", cudaGetErrorString(err));
-        exit(1);
-    }
+    HANDLE_ERROR(cudaMallocManaged((void **) &firstPrimeInBlock, sizeof(uint128_t)));
+    HANDLE_ERROR(cudaMallocManaged((void **) &lastPrimeInBlock, sizeof(uint128_t)));
 
-    cudaMemset(globalSieve1, 0, sieveLengthWords * sizeof(uint32_t));
+    HANDLE_ERROR(cudaMemset(globalSieve1, 0, sieveLengthWords * sizeof(uint32_t)));
     kernel<<<192,512>>>(
         globalSieve1, sieveStart, (uint32_t) sieveLengthWords,
         primeListCuda, rhoListCuda, primeList.size(),
@@ -1379,7 +1388,7 @@ int main(int argc, char* argv[]) {
 #if RUN_TESTS
     int blocksToTest = 4;
 #else
-    int blocksToTest = 1000000000;
+    int blocksToTest = 7;
 #endif
     auto start = std::chrono::high_resolution_clock::now();
     auto finish = start;
@@ -1391,14 +1400,11 @@ int main(int argc, char* argv[]) {
         (if i >= 1) Double-checking and printing the gaps of block i-1
         If WORD_LENGTH == WORD_SIEVING_LENGTH, then we don't double check and just print all of them
         */
-        if (i>0 && (i-1)%PROGRESS_UPDATE_BLOCKS == 0) {
-            finish = printProgress(start, finish, sieveStart, i-1);
-        }
-        cudaMemset(globalSieve2, 0, sieveLengthWords * sizeof(uint32_t));
+        HANDLE_ERROR(cudaMemset(globalSieve2, 0, sieveLengthWords * sizeof(uint32_t)));
         
         if (i>0) {
-            cudaMemcpy(resultListHost, resultList, sizeof(PrimeGap)*RESULT_LIST_SIZE, cudaMemcpyDeviceToHost);
-            cudaMemset(resultList, 0, RESULT_LIST_SIZE * sizeof(PrimeGap));
+            HANDLE_ERROR(cudaMemcpy(resultListHost, resultList, sizeof(PrimeGap)*RESULT_LIST_SIZE, cudaMemcpyDeviceToHost));
+            HANDLE_ERROR(cudaMemset(resultList, 0, RESULT_LIST_SIZE * sizeof(PrimeGap)));
         }
 #if RUN_TESTS
         if (i==1) assert(resultListHost[0].gap == 27);
@@ -1423,7 +1429,7 @@ int main(int argc, char* argv[]) {
             Number of resulting gaps chaanges to 52,37,49 for the 3 blocks
             */
             uint32_t val;
-            cudaMemcpy(&val, globalSieve2+322375634, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+            HANDLE_ERROR(cudaMemcpy(&val, globalSieve2+322375634, sizeof(uint32_t), cudaMemcpyDeviceToHost));
             if (val != 1834999230) {printf("FAILED PSP TEST IN KERNEL 2 %u\n", val);}
             else {printf("Passed kernel 2 tests.\n");}
         }
@@ -1431,39 +1437,46 @@ int main(int argc, char* argv[]) {
         if (i>0) {
             displayResultsAndClear(resultListHost);
         }
-        cudaDeviceSynchronize();
+        HANDLE_ERROR(cudaDeviceSynchronize());
         
+        if (i%PROGRESS_UPDATE_BLOCKS == 0) {
+            finish = printProgress(start, finish, sieveStart, i);
+        }
+        //printf("    aksjdf this %d %d last %d\n", (*firstPrimeInBlock % 1000000000), (*lastPrimeInBlock % 1000000000),
+        //    (lastPrimeInLastBlock % 1000000000));
+
         if (lastPrimeInLastBlock && (*firstPrimeInBlock - lastPrimeInLastBlock >= MIN_GAP_SIZE)) {
             checkGapAndPrint(lastPrimeInLastBlock, *firstPrimeInBlock);
         }
+        //printf("    after \n");
         lastPrimeInLastBlock = *lastPrimeInBlock;
 
         sieveStart += sieveLength;
         std::swap(globalSieve1, globalSieve2);
     }
 
-    if ((blocksToTest-2)%PROGRESS_UPDATE_BLOCKS == 0) {
+    /*if ((blocksToTest-2)%PROGRESS_UPDATE_BLOCKS == 0) {
         finish = printProgress(start, finish, sieveStart, blocksToTest-2);
-    }
-    cudaMemcpy(resultListHost, resultList, sizeof(PrimeGap)*RESULT_LIST_SIZE, cudaMemcpyDeviceToHost);
-    cudaMemset(resultList, 0, RESULT_LIST_SIZE * sizeof(PrimeGap));
+    }*/
+    HANDLE_ERROR(cudaMemcpy(resultListHost, resultList, sizeof(PrimeGap)*RESULT_LIST_SIZE, cudaMemcpyDeviceToHost));
+    HANDLE_ERROR(cudaMemset(resultList, 0, RESULT_LIST_SIZE * sizeof(PrimeGap)));
 #if RUN_TESTS
     assert(resultListHost[0].gap == 12); // only 12 gaps of size >=720 in this block, a lot less than expected
 #endif
 
     kernel2<<<192,512>>>(globalSieve1, sieveStart, sieveLengthWords, resultList, firstPrimeInBlock, lastPrimeInBlock);
     displayResultsAndClear(resultListHost);
-    cudaDeviceSynchronize();
+    HANDLE_ERROR(cudaDeviceSynchronize());
 
     if (lastPrimeInLastBlock && (*firstPrimeInBlock - lastPrimeInLastBlock >= MIN_GAP_SIZE)) {
-        printGap(lastPrimeInLastBlock, *firstPrimeInBlock);
+        checkGapAndPrint(lastPrimeInLastBlock, *firstPrimeInBlock);
     }
 
     if ((blocksToTest-1)%PROGRESS_UPDATE_BLOCKS == 0) {
         finish = printProgress(start, finish, sieveStart, blocksToTest-1);
     }
 
-    cudaMemcpy(resultListHost, resultList, sizeof(PrimeGap)*RESULT_LIST_SIZE, cudaMemcpyDeviceToHost);
+    HANDLE_ERROR(cudaMemcpy(resultListHost, resultList, sizeof(PrimeGap)*RESULT_LIST_SIZE, cudaMemcpyDeviceToHost));
 #if RUN_TESTS
     assert(resultListHost[0].gap == 22); // only 12 gaps of size >=720 in this block, a lot less than expected
 #endif
@@ -1476,13 +1489,14 @@ int main(int argc, char* argv[]) {
 }
 
 /*
-- General tips:
-    - Don't be afraid to UNROLL LOOPS!
-    - Inline functions?
-    - We need to use an AtomicOr function on ALL STEPS!!! Because some blocks might be in a different step than others!
-        - This includes the shared memory step, because we cannot miss any bits with sieving small primes due to PSPs
-
 THINGS TO ADD:
+
+handle constants in a better way than macros
+find a way to do "proofs" that you searched a range
+    some sort of combination of all the primes you searched?
+    i.e. for one block, the proof would look like <block start> <all the params> N
+        where N is something that can only be found if you have actually done the work
+        that way, if you only do 90% of the work, a randomly chosen block will find that out 10% of the time
 
 settings/worktodo files: (should put this in the readme at some point)
 
@@ -1498,6 +1512,7 @@ NAME=B.Kehrig
 === worktodo.txt file format: ===
 # format: start(e12), end(e12), minGap, username
 18470057,18571674,1200,B.Kehrig  #will find the 1552 and 1572 gaps, but also will take a while (smaller tasks recommended)
+20730000,20740000,1200,B.Kehrig  #will find the 1676 gap, and is a reasonable size for a task
 
 === output file format: === (location: output/gaps_<start>e12_<end>e12_min<mingap>_<name>.txt)
 ===== PRIME GAP REPORT =====
@@ -1507,7 +1522,7 @@ Gaps >=1300: <x>
 ... keep going until there are none left
 Largest gap: <size> <prime> <merit> <name>
 
-All gaps >= <mingap>: # format: <gapsize> <startprime> <merit> <name>
+Exhaustive list of gaps >= <mingap>: # format: <gapsize> <startprime> <merit> <name>
 1572 18571673432051830099 35.430806 B.Kehrig
 1552 18470057946260698231 34.984359 B.Kehrig # (these would be in the opposite order if SORT_OUTPUPT_BY_GAPSIZE=0)
 
@@ -1517,10 +1532,5 @@ Use a compile-time variable RUN_TESTS
 if set, it will do a run with some specified settings (start num, block size, etc...) to stay consistent
 it will look at certain values from sieving and pseudoprime sieving and compare that to the correct values
 For testing the primality tests, ???
-
-For RTX 4090, ideal settings seems to be:
-256 thread blocks
-Use 11520 words in shared memory, leaving 768
-Can get 1.23e12/s ideally
 
 */
