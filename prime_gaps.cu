@@ -1388,7 +1388,7 @@ int main(int argc, char* argv[]) {
 #if RUN_TESTS
     int blocksToTest = 4;
 #else
-    int blocksToTest = 7;
+    int blocksToTest = 1000000000;
 #endif
     auto start = std::chrono::high_resolution_clock::now();
     auto finish = start;
