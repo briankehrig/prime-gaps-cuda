@@ -29,6 +29,10 @@ typedef unsigned __int128 uint128_t;
 #define RUN_TESTS 0
 #endif
 
+#ifndef GPU_BLOCKS
+#define GPU_BLOCKS 192
+#endif
+
 #if RUN_TESTS
     #define BLOCK_SIZE 46080000000
     #define WORD_LENGTH 120
@@ -542,18 +546,33 @@ __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengt
                                             uint32_t p, uint32_t startBit, uint32_t numBits) {
 #if SIEVE_BY_30
     uint32_t pInv = INVERSES_30[(p%30)/2];
+    // if start/30 is under 2^64, then we can convert to uint64 before the "% p" for a ~0.5% speedup
     uint32_t precalculated = p - (start/30) % p;
     for (uint32_t bit=startBit; bit<startBit+numBits; bit++) {
         // TODO: I should be able to precalculate this entire thing
         // only need to precalculate (8 bits) * (# of sieving primes) words
+        // we should put this in global memory (???), ordered like this:
+        // [prime0bit0, prime1bit0, prime2bit0 .... prime0bit1 ...]
+        /*
+        SEGMENTED SIEVE FOR LARGE PRIMES:
+        Suppose we are doing a segmented sieve with 32768 primes.
+        The interval of 92,160,000,000 is split into 192 parts for the 192 blocks, each gets 480,000,000.
+        The width of one segment is 8192 * 120 = 983,040 which is about 488.28125 (488 or 489) segments per block.
+        32768 primes / 256 threads = 128 primes/thread.
+        We will have thread 0 do primes 0,256,512,768...32512 to even out the work.
+        We have a local list of size 128, containing the next "hit" for each of the 128 primes.
+        For each segment, we just have to iterate over the list, and whenever its "hit" is in the current segment,
+            sieve it out and increment it (and repeat until it's no longer in the segment)
+        */
         uint32_t startByte = (p * ((SIEVE_POS_TO_VALUE[bit] * pInv)%30)) / 30 + precalculated;
 #if (WORD_LENGTH == 240)
         if (startByte % 2) startByte += p;
         startByte /= 2;
 #endif
         if (startByte >= p) startByte -= p;
-        uint32_t mask = 1 << bit;
+        uint8_t mask = 1 << bit;
         for (int32_t byte=startByte; byte<sieveLengthWords*4; byte += p) {
+            // TODO: Have multiple running counters so that we don't have to do mods?? will that even help?
             atomicOr(&sieve[byte/4], mask << ((byte%4)*8));
         }
     }
@@ -1160,9 +1179,12 @@ void printGap(uint128_t startPrime, uint128_t endPrime) {
 #endif
     uint32_t gap = endPrime-startPrime;
     std::string suffix = "";
-    int missing[] = {1432,1444,1458,1472,1474,1478,1484,1492,1496,1498,1500,1504,1508,1512,1514,1516,1518,1520,1522,
-                     1524,1528,1532,1534,1536,1538,1542,1544,1546,1548,1554,1556,1558,1560,1562,1564,1566,1568,1570};
-    if (gap > 1572) {
+    int missing[] = {1444,1458,1472,1474,1478,1484,1492,1498,1500,1504,1508,1512,1514,1516,1518,1520,1522,
+                     1528,1532,1534,1538,1542,1544,1546,1548,1554,1556,1558,1560,1562,1564,1566,1568,1570,
+                     1574,1576,1578,1580,1582,1584,1586,1588,1590,1592,1594,1596,1598,1600,1602,1604,1606,
+                     1608,1610,1612,1614,1616,1618,1620,1622,1624,1626,1628,1630,1632,1634,1636,1638,1640,
+                     1642,1644,1646,1648,1650,1652,1654,1656,1658,1660,1662,1664,1666,1668,1670,1672,1674};
+    if (gap > 1676) {
         suffix = " MAXIMAL";
     } else {
         for (int testGap : missing) {
@@ -1371,7 +1393,7 @@ int main(int argc, char* argv[]) {
     HANDLE_ERROR(cudaMallocManaged((void **) &lastPrimeInBlock, sizeof(uint128_t)));
 
     HANDLE_ERROR(cudaMemset(globalSieve1, 0, sieveLengthWords * sizeof(uint32_t)));
-    kernel<<<192,512>>>(
+    kernel<<<GPU_BLOCKS,512>>>(
         globalSieve1, sieveStart, (uint32_t) sieveLengthWords,
         primeListCuda, rhoListCuda, primeList.size(),
         smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4
@@ -1411,7 +1433,7 @@ int main(int argc, char* argv[]) {
         if (i==2) assert(resultListHost[0].gap == 25);
 #endif
 
-        kernelBoth<<<192,512>>>(
+        kernelBoth<<<GPU_BLOCKS,512>>>(
             globalSieve2, globalSieve1, sieveStart+sieveLength, (uint32_t) sieveLengthWords,
             primeListCuda, rhoListCuda, primeList.size(),
             smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4, 144,
@@ -1464,7 +1486,7 @@ int main(int argc, char* argv[]) {
     assert(resultListHost[0].gap == 12); // only 12 gaps of size >=720 in this block, a lot less than expected
 #endif
 
-    kernel2<<<192,512>>>(globalSieve1, sieveStart, sieveLengthWords, resultList, firstPrimeInBlock, lastPrimeInBlock);
+    kernel2<<<GPU_BLOCKS,512>>>(globalSieve1, sieveStart, sieveLengthWords, resultList, firstPrimeInBlock, lastPrimeInBlock);
     displayResultsAndClear(resultListHost);
     HANDLE_ERROR(cudaDeviceSynchronize());
 
