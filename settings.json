@@ -1,0 +1,51 @@
+// Set "-1" in any field if you want the code to automatically estimate a good value.
+{
+    "KernelOptions": {
+        // The only valid values of this are 120 and 240 (for now)
+        // For normal work, it should be 240.
+        // If minGapSize is too low, you might want to change this to 120 for performance.
+        // Also, the minGapSize for a work unit must be a multiple of WORD_LENGTH.
+        "WORD_LENGTH": 240,
+
+        // The number of GPU blocks to run the kernel with. Recommended to keep this at -1
+        "GPU_BLOCKS": -1,
+        
+        // The size of the interval on the number line that a single kernel will sieve.
+        // Recommended to keep this at -1, but it may be worth tinkering with this value a bit
+        // This must be less than (GPU memory in bytes) * (WORD_LENGTH / 4), preferably about 1/2 to 3/4 this value.
+        // This value doesn't really matter much for performance, as long as it's not unusually small
+        "BLOCK_SIZE": -1,
+
+        // The proportion of total GPU blocks to use for sieving a block.
+        // The remainder will do prime checks on the previous block simultaneously.
+        // The optimal value here is either 0.5 or 0.75, depending on the GPU. Recommended to manually test.
+        // Titan V and RTX 4090 are optimally 0.5, GTX 1660 Ti is optimally 0.75
+        "PROPORTION_OF_BLOCKS_FOR_SIEVING": 0.5,
+
+        // The size of the shared memory array, out of a possible 12288.
+        // This should be in the range [8192,12288], the optimal value depends on the GPU and should be tested
+        
+        // Titan V -> 12288
+        // RTX 4090 -> approx. 10240 or 11264
+        // GTX 1660 Ti -> 8192
+        "SHARED_SIZE_WORDS": 8192,
+
+        // The number of small prime wheels to use for sieving.
+        // Wheel 1 uses primes 7-29, wheel 2 uses 31-47, wheel 3 uses 53-67, wheel 4 uses 71-83.
+        // This should usually be 4, but 3 is sometimes better depending on the GPU.
+        "SMALL_PRIME_WHEELS": 4,
+
+        // The number of primes to sieve with, after sieving with the small prime wheels is done.
+        // Must be a multiple of 512.
+        // 4096 is usually good, but with the Titan V the optimal number is as high as 8192.
+        "NUM_MEDIUM_PRIMES_BASE": 4096
+    },
+    "ReportOptions": {
+        // Whether to sort the gaps in the output file by their gap size.
+        // If not, it will sort by the size of the prime (i.e. "chronologically").
+        "SORT_OUTPUT_BY_GAPSIZE": 1,
+
+        // Your name
+        "NAME": "B.Kehrig"
+    }
+}

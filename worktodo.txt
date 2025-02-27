@@ -1,0 +1,7 @@
+# format: <start(e12)>, <end(e12)>, <minGap>, [deviceIdx]
+# if deviceIdx is not included, it will default to 0
+# each line will only run if deviceIdx matches the command line argument to the python code
+# this way, you can run multiple instances with different devices
+#     without editing the worktodo.txt or settings.json files.
+
+20733746,20733747,960
