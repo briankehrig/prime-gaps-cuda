@@ -46,18 +46,39 @@ def getStdoutWhileRunning(cmd):
     if p.returncode != 0:
         raise subp.CalledProcessError(p.returncode, p.args)
 
+def stringRepresents(string):
+    try:
+        int(string)
+        return "int"
+    except ValueError:
+        pass
+
+    try:
+        float(string)
+        return "float"
+    except ValueError:
+        pass
+    
+    return "string"
+
 def getDeviceInfo():
     deviceInfo = []
+    if not os.path.exists("device_properties.out") or \
+      os.path.getmtime("device_properties.cu") > os.path.getmtime("device_properties.out"):
+        print("Recompiling device_properties.cu")
+        subp.run(["nvcc", "device_properties.cu", "-o", "device_properties.out"])
     for line in getStdoutWhileRunning(["./device_properties.out"]):
         line = line.split()
-        currentDeviceNum = None
         if line[0] == "NewDevice":
             deviceInfo.append({})
         else:
-            try:
+            represents = stringRepresents(line[1])
+            if represents == "int":
                 deviceInfo[-1][line[0]] = int(line[1])
-            except ValueError:
+            elif represents == "float":
                 deviceInfo[-1][line[0]] = float(line[1])
+            else:
+                deviceInfo[-1][line[0]] = " ".join(line[1:])
     return deviceInfo
 
 def removeDoubleSlashComments(string):
@@ -67,13 +88,14 @@ def removeDoubleSlashComments(string):
         output.append(line.split('//')[0])
     return '\n'.join(output)
 
-def getRecommendedParameters(deviceInfo, targetMemoryUsage):
+def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
     '''
     small prime wheels = 4, medium primes = 4096
     word length = 240
     gpu blocks: take cuda cores, divide out all powers of 2, that is the starting amount of blocks
         then, multiply by 2 until blocks > 128 AND blocks*threads >= total cuda cores
-    shared size: ??? experimentally, 8192 is good for GPUs like mine, but maybe 10240 or 11264 or 12288 is better for bigger ones
+    shared size: ??? experimentally, 8192 is good for GPUs like mine,
+        but maybe 10240 or 11264 or 12288 is better for bigger ones
     Block size = roughly biggest that can fit into memory while being a "nice" multiple of shared size * blocks
 
     the following parameters need to be experimentally determined:
@@ -83,14 +105,24 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage):
     SMALL_PRIME_WHEELS is usually 4, but it's sometimes 3 (it's 4 for Titan V)
 
     '''
-    recommended = {"WORD_LENGTH": 240}
-    recommended["SHARED_SIZE_WORDS"] = 12288
-    recommended["SMALL_PRIME_WHEELS"] = 4
-    recommended["NUM_MEDIUM_PRIMES_BASE"] = 8192
+    # We have to handle WORD_LENGTH separately and first
+    # because the ACTUAL value of WORD_LENGTH (not just the recommended value)
+    # affects the recommendations of other parameters
+    recommended = {"WORD_LENGTH": settings["KernelOptions"]["WORD_LENGTH"]}
+    recommended["WORD_LENGTH"] = recommended["WORD_LENGTH"] if recommended["WORD_LENGTH"] != -1 else 240
+
+    if "Titan V" in deviceInfo["Name"]:
+        recommended["SHARED_SIZE_WORDS"] = 12288
+    elif "GTX 1660" in deviceInfo["Name"]:
+        recommended["SHARED_SIZE_WORDS"] = 8192
+    elif "RTX 4090" in deviceInfo["Name"]:
+        recommended["SHARED_SIZE_WORDS"] = 10240
+    else:
+        recommended["SHARED_SIZE_WORDS"] = 12288
+
+    recommended["SMALL_PRIME_WHEELS"] = 3 if "RTX 4090" in deviceInfo["Name"] else 4
+    recommended["NUM_MEDIUM_PRIMES_BASE"] = 8192 if "Titan V" in deviceInfo["Name"] else 4096
     recommended["PROPORTION_OF_BLOCKS_FOR_SIEVING"] = 0.5
-
-    # TODO: THE RECOMMENDED VALUES SHOULD TAKE INTO ACCOUNT BEING OVERWRITTEN BY SETTINGS.JSON!!!!!
-
 
     gpuBlocks = deviceInfo["CUDACores"]
     while (gpuBlocks % 2 == 0): gpuBlocks //= 2
@@ -100,30 +132,62 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage):
     # we divide targetMemoryUsage by 2 since we will have 2 lists in memory at the same time
     blockSize = int(deviceInfo["GlobalMemGB"]*2**30 * targetMemoryUsage/2) * recommended["WORD_LENGTH"]//4
     blockSize -= blockSize % (recommended["SHARED_SIZE_WORDS"] * recommended["GPU_BLOCKS"])
-    recommended["BLOCK_SIZE"] = blockSize//2
+    recommended["BLOCK_SIZE"] = blockSize
 
     return recommended
 
+def sanityCheckParameters(parameters, minGap):
+    if minGap < 1200 and parameters["WORD_LENGTH"] != 120:
+        print(f"WARNING: WORD_LENGTH={parameters['WORD_LENGTH']} and minGap<1200 do not mix well.")
+    
+    if minGap >= 1200 and parameters["WORD_LENGTH"] == 120:
+        print(f"WARNING: With a large minGap (>=1200) you can probably gain more speed by setting WORD_LENGTH=240.")
+
+    if parameters["SMALL_PRIME_WHEELS"] not in (3,4):
+        print(f"WARNING: SMALL_PRIME_WHEELS should always be either 3 or 4")
+
+    if parameters["SHARED_SIZE_WORDS"] not in (8192,9216,10240,11264,12288):
+        print(f"WARNING: SHARED_SIZE_WORDS should be 8-12 times a multiple of 1024 to optimize speed")
+
+    if parameters["NUM_MEDIUM_PRIMES_BASE"] % 512:
+        print(f"ERROR: NUM_MEDIUM_PRIMES_BASE must be a multiple of 512")
+        sys.exit(1)
+
+    if parameters["PROPORTION_OF_BLOCKS_FOR_SIEVING"] not in (0.5,0.75):
+        print(f"WARNING: PROPORTION_OF_BLOCKS_FOR_SIEVING should be 0.5 (sometimes 0.75) to optimize speed")
+
+    if parameters["PROGRESS_EVERY"] != 1:
+        print(f"ERROR: PROGRESS_EVERY must be 1")
+        sys.exit(1)
+
+    if parameters["RUN_FROM_PYTHON"] != 1:
+        print(f"ERROR: RUN_FROM_PYTHON must be 1")
+        sys.exit(1)
+
 def progressBar(length, progress):
     filled = min(length, int(progress*(length+1)))
-    return Style.BRGREEN + '0'*filled + Style.WHITE+Style.DIM + '.'*(length-filled) + Style.RESET
+    return f"{Style.BRGREEN}{'0'*filled}{Style.WHITE}{Style.DIM}{'.'*(length-filled)}{Style.RESET}"
 
 def formatETA(seconds):
-    s = int(seconds)
-    d = s // 86400
-    s -= d * 86400
-    h = s // 3600
-    s -= h * 3600
-    m = s // 60
-    s -= m * 60
-    if d: return f"{d}d{h:02d}h{m:02d}m{s:02d}s"
+    x = int(seconds)
+    s = x % 60 # seconds
+    x //= 60
+    m = x % 60 # minutes
+    x //= 60
+    h = x % 60 # hours
+    x //= 24
+    d = x # days
+    if d>9999: return f">9999d"
+    if d>99: return f"{d}d{h:02d}h"
+    if d: return f"{d}d{h:02d}h{m:02d}m"
     if h: return f"{h}h{m:02d}m{s:02d}s"
     if m: return f"{m}m{s:02d}s"
     return f"{s}s"
 
 def printProgress(proportionDone, currentlyAt, top5, speed, eta):
+    width, _ = os.get_terminal_size()
     print(f"{Style.WIPE_LINE}{proportionDone*100:5.2f}%{' ' if proportionDone<1 else ''}"
-          f"[{progressBar(25, proportionDone)}] "
+          f"[{progressBar(width-92, proportionDone)}] "
           f"{Style.BRBLUE}At:{Style.RESET} {currentlyAt:.7e} "
           f"{Style.BRMAGENTA}Best:{Style.RESET} {' '.join(top5)} "
           f"{Style.BRYELLOW}Speed:{Style.RESET}{speed:7.2f} B/s "
@@ -143,6 +207,7 @@ def runOne(parameters, start, end, minGap, deviceIdx):
     totalSpeed = 0
     top5 = ["----"] * 5
     allResults = []
+    sanityCheckParameters(parameters, minGap)
     for line in getStdoutWhileRunning(
         ["./prime_gaps_py.out", str(minGap), str(start), str(blocksToTest), str(deviceIdx)]
     ):
@@ -167,7 +232,7 @@ def runOne(parameters, start, end, minGap, deviceIdx):
             if p < end:
                 newResult = (gap, float(line[3]), p)
                 if newResult[2] == 0:
-                    # on my GPU, this happens if minGapSize <= 360
+                    # on my GPU, this happens if minGapSize is 360 or lower with WORD_LENGTH==120
                     raise "ERROR: Something weird happened, maybe you set minGapSize too low?"
                 allResults.append((gap, float(line[3]), p))
         elif line[0] == "ERROR:":
@@ -175,20 +240,6 @@ def runOne(parameters, start, end, minGap, deviceIdx):
     return allResults
 
 def writeOutputFile(parameters, start, end, minGap, results, reportOptions):
-    '''
-    ===== PRIME GAP REPORT =====
-    Target gap size: <mingap>
-    Range Searched: 
-    Gaps >=1200: <x> (or whatever hundred is at least as large as mingap)
-    Gaps >=1250: <x>
-    Gaps >=1300: <x>
-    ... keep going until there are none left
-    Largest gap: <size> <merit> <prime>
-
-    Full list of gaps >= <mingap>: # format: <gapsize> <startprime> <merit>
-    1572 35.4308 18571673432051830099
-    1552 34.9844 18470057946260698231 # (these would be in the opposite order if SORT_OUTPUPT_BY_GAPSIZE=0)
-    '''
     fname = f"reports/GapReport_{start}e12_{end}e12_{minGap}.txt"
 
     kernelParams = "\n".join(f"    {key}={value}" for key, value in parameters.items())
@@ -200,19 +251,23 @@ def writeOutputFile(parameters, start, end, minGap, results, reportOptions):
         if count: hundredStats += f"Gaps >={x}: {count}\n"
         else: break
         x += 100
+    if hundredStats: hundredStats = "\n" + hundredStats
     
-    largest = max(results, key=lambda x: x[0])
-    largestStr = [r for r in results if r[0] == largest[0]]
-    largestStr.sort(key=lambda x: x[2])
-    largestStr = "\n".join(" ".join(map(str, r)) for r in largestStr)
+    if results:
+        largest = [r for r in results if r[0] == max(x[0] for x in results)]
 
-    if reportOptions["SORT_OUTPUT_BY_GAPSIZE"]:
-        results.sort(key=lambda x: x[0], reverse=True)
+        largest.sort(key=lambda x: x[2])
+        if reportOptions["SORT_OUTPUT_BY_GAPSIZE"]:
+            results.sort(key=lambda x: x[0], reverse=True)
+            assert False
+        else:
+            results.sort(key=lambda x: x[2])
+        # we recalculate the merit here, because we don't want to round it twice and get incorrect results
+        largestStr = "\n".join(f"{r[0]:{len(str(largest[0][0]))}d} {r[0]/math.log(r[2]):7.4f} {r[2]}" for r in largest)
+        resultsStr = "\n".join(f"{r[0]:{len(str(largest[0][0]))}d} {r[0]/math.log(r[2]):7.4f} {r[2]}" for r in results)
     else:
-        results.sort(key=lambda x: x[2])
-    # we recalculate the merit here, because we don't want to round it twice and get incorrect results
-
-    resultsStr = "\n".join(f"{r[0]:{len(str(largest[0]))}d} {r[0]/math.log(r[2]):7.4f} {r[2]}" for r in results)
+        largestStr = "(No gaps)"
+        resultsStr = "(No gaps)"
         
     contents = f"""======== PRIME GAP REPORT ========
 
@@ -223,7 +278,6 @@ Kernel parameters:
 
 Target gap size: {minGap}
 Range searched: {start}e12 - {end}e12
-
 {hundredStats}
 Largest gap:
 {largestStr}
@@ -246,10 +300,16 @@ def main():
         return
     else:
         deviceIdx = int(sys.argv[1])
-    parameters = getRecommendedParameters(getDeviceInfo()[0], 0.5)
+    
+    deviceInfo = getDeviceInfo()
+    if deviceIdx >= len(deviceInfo):
+        print(f"Device index {deviceIdx} is out of range. Detected {len(deviceInfo)} devices total.")
+        return
+    
     with open("settings.json") as f:
-        data = removeDoubleSlashComments(f.read())
-        settings = json.loads(data)
+        settings = json.loads(removeDoubleSlashComments(f.read()))
+    parameters = getRecommendedParameters(deviceInfo[deviceIdx], 0.5, settings)
+
     for setting in settings["KernelOptions"]:
         if settings["KernelOptions"][setting] != -1:
             parameters[setting] = settings["KernelOptions"][setting]
@@ -260,10 +320,9 @@ def main():
     if needToRecompile(parameters):
         command = 'nvcc prime_gaps.cu -o prime_gaps_py.out'
         for param, value in parameters.items():
-            print(f"Using parameter:{Style.BRGREEN} {param}{Style.RESET}={value}")
             command += f" -D{param}={value}"
         
-        print(f"Compiling with command: '{command}'")
+        print(f"Compiling with command: '{Style.BRYELLOW}{command}{Style.RESET}'")
         p = subp.run(command.split(), stdout=subp.PIPE, bufsize=1, universal_newlines=True)
         if p.returncode != 0:
             raise subp.CalledProcessError(p.returncode, p.args)

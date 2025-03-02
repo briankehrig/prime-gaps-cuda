@@ -105,6 +105,10 @@ __constant__ uint8_t NEXT_SIEVE_HIT[32][WORD_LENGTH/2][3];
 #define NUM_MEDIUM_PRIMES_BASE 4096
 #endif
 
+#ifndef PROPORTION_OF_BLOCKS_FOR_SIEVING
+#define PROPORTION_OF_BLOCKS_FOR_SIEVING 0.75
+#endif
+
 #define NUM_MEDIUM_PRIMES (NUM_MEDIUM_PRIMES_BASE - SIEVING_DUPLICATED_PRIMES)
 
 #ifndef NUM_SMALL_PRIME_WHEELS
@@ -681,7 +685,6 @@ __device__ void sieveLargePrimes(uint32_t* sieve, uint32_t sieveLengthWords, uin
 __device__ void sievePseudoprimes(uint32_t* sieve, uint32_t sieveLengthWords, uint128_t start,
                                   uint32_t* primeList, uint32_t* rhoList, uint32_t primeCount,
                                   uint32_t numBlocks) {
-    return;
     // sieve should be in GLOBAL MEMORY for this function to work properly
 
     // We are sieving for entries that are congruent to p mod p*rho(p), because this is guaranteed
@@ -1593,7 +1596,8 @@ int main(int argc, char* argv[]) {
         kernelBoth<<<GPU_BLOCKS,256>>>(
             globalSieve2, globalSieve1, sieveStart+sieveLength, (uint32_t) sieveLengthWords,
             minGapSize, primeListCuda, rhoListCuda, primeModsCuda, primeList.size(),
-            smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4, 144,
+            smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4,
+            (int) (PROPORTION_OF_BLOCKS_FOR_SIEVING * GPU_BLOCKS),
             resultList, firstPrimeInBlock, lastPrimeInBlock
         );
         

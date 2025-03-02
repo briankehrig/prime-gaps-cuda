@@ -17,10 +17,10 @@
         "BLOCK_SIZE": -1,
 
         // The proportion of total GPU blocks to use for sieving a block.
-        // The remainder will do prime checks on the previous block simultaneously.
+        // The remainder will search for gaps on the previous block simultaneously.
         // The optimal value here is either 0.5 or 0.75, depending on the GPU. Recommended to manually test.
-        // Titan V and RTX 4090 are optimally 0.5, GTX 1660 Ti is optimally 0.75
-        "PROPORTION_OF_BLOCKS_FOR_SIEVING": 0.5,
+        // Titan V and RTX 4090 are optimally 0.5, GTX 1660 Ti is either 0.5 or 0.75
+        "PROPORTION_OF_BLOCKS_FOR_SIEVING": -1,
 
         // The size of the shared memory array, out of a possible 12288.
         // This should be in the range [8192,12288], the optimal value depends on the GPU and should be tested
@@ -28,22 +28,22 @@
         // Titan V -> 12288
         // RTX 4090 -> approx. 10240 or 11264
         // GTX 1660 Ti -> 8192
-        "SHARED_SIZE_WORDS": 8192,
+        "SHARED_SIZE_WORDS": -1,
 
         // The number of small prime wheels to use for sieving.
         // Wheel 1 uses primes 7-29, wheel 2 uses 31-47, wheel 3 uses 53-67, wheel 4 uses 71-83.
         // This should usually be 4, but 3 is sometimes better depending on the GPU.
-        "SMALL_PRIME_WHEELS": 4,
+        "SMALL_PRIME_WHEELS": -1,
 
         // The number of primes to sieve with, after sieving with the small prime wheels is done.
         // Must be a multiple of 512.
         // 4096 is usually good, but with the Titan V the optimal number is as high as 8192.
-        "NUM_MEDIUM_PRIMES_BASE": 4096
+        "NUM_MEDIUM_PRIMES_BASE": -1
     },
     "ReportOptions": {
         // Whether to sort the gaps in the output file by their gap size.
         // If not, it will sort by the size of the prime (i.e. "chronologically").
-        "SORT_OUTPUT_BY_GAPSIZE": 1,
+        "SORT_OUTPUT_BY_GAPSIZE": false,
 
         // Your name
         "NAME": "B.Kehrig"

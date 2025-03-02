@@ -3,5 +3,21 @@
 # each line will only run if deviceIdx matches the command line argument to the python code
 # this way, you can run multiple instances with different devices
 #     without editing the worktodo.txt or settings.json files.
+# E.g. you can have something like this:
+# 22000000,22010000,0
+# 22010000,22020000,1
+# 22020000,22030000,0
+# 22030000,22040000,1
+# If you run two instances of the python wrapper, and give different device indexes as arguments,
+# the instance that got a deviceIdx of 0 will only run the 1st and 3rd of those lines,
+# and the one that got a 1 will run the 2nd and 4th lines.
 
-20733746,20733747,960
+# For testing: 18447233112263860537 = 4015729 * 4593744526153
+#    This number is a base-2 PSP that is contained in a gap of size 710
+#    The gap is 18447233112263859833 to 18447233112263860543
+# It can be ran by uncommenting this line:
+# 18447233,18447234,690
+# It requires WORD_LENGTH to be set to 120 to work properly, due to the fact that 690 is quite small.
+# Notice that the aforementioned gap starting at 18447233112263859833 does appear in the output.
+
+20733746,20733747,1200
