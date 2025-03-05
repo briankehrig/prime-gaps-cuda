@@ -5,6 +5,10 @@ import subprocess as subp
 import sys
 
 LAST_PARAMS_FILE = "_LAST_PARAMS"
+WORKTODO_FILE = "worktodo.txt"
+SETTINGS_FILE = "settings.json"
+MAIN_CUDA_FILE = "prime_gaps.cu"
+DEVICE_PROPERTIES_FILE = "device_properties.cu"
 
 class Style:
     RESET = '\033[0m'
@@ -66,9 +70,10 @@ def stringRepresents(string):
 def getDeviceInfo():
     deviceInfo = []
     if not os.path.exists("device_properties.out") or \
-      os.path.getmtime("device_properties.cu") > os.path.getmtime("device_properties.out"):
-        print("Recompiling device_properties.cu")
-        subp.run(["nvcc", "device_properties.cu", "-o", "device_properties.out"])
+      os.path.getmtime(DEVICE_PROPERTIES_FILE) > os.path.getmtime("device_properties.out"):
+        print(f"Compiling {DEVICE_PROPERTIES_FILE} with command: "
+              f"{Style.BRYELLOW}'nvcc {DEVICE_PROPERTIES_FILE} -o device_properties.out'{Style.RESET}")
+        subp.run(["nvcc", DEVICE_PROPERTIES_FILE, "-o", "device_properties.out"])
     for line in getStdoutWhileRunning(["./device_properties.out"]):
         line = line.split()
         if line[0] == "NewDevice":
@@ -199,7 +204,7 @@ def printProgress(proportionDone, currentlyAt, top5, speed, eta):
 
 def needToRecompile(parameters):
     if not os.path.exists(LAST_PARAMS_FILE): return True
-    if os.path.getmtime("prime_gaps.cu") > os.path.getmtime(LAST_PARAMS_FILE): return True
+    if os.path.getmtime(MAIN_CUDA_FILE) > os.path.getmtime(LAST_PARAMS_FILE): return True
     with open(LAST_PARAMS_FILE) as f:
         return json.loads(f.read()) != parameters
 
@@ -241,8 +246,11 @@ def runOne(parameters, start, end, minGap, deviceIdx):
             print(' '.join(line))
     return allResults
 
+def getReportFileName(start, end, minGap):
+    return f"reports/GapReport_{start}e12_{end}e12_{minGap}.txt"
+
 def writeOutputFile(parameters, start, end, minGap, results, reportOptions):
-    fname = f"reports/GapReport_{start}e12_{end}e12_{minGap}.txt"
+    fname = getReportFileName(start, end, minGap)
 
     kernelParams = "\n".join(f"    {key}={value}" for key, value in parameters.items())
 
@@ -298,7 +306,7 @@ def main():
         deviceIdx = 0
     elif len(sys.argv) > 2:
         print("Usage: 'python3 prime_gaps.py [deviceIdx]'")
-        print("See settings.json for more info on configuration.")
+        print(f"See {SETTINGS_FILE} for more info on configuration.")
         return
     else:
         deviceIdx = int(sys.argv[1])
@@ -308,7 +316,7 @@ def main():
         print(f"Device index {deviceIdx} is out of range. Detected {len(deviceInfo)} devices total.")
         return
     
-    with open("settings.json") as f:
+    with open(SETTINGS_FILE) as f:
         settings = json.loads(removeDoubleSlashComments(f.read()))
     parameters = getRecommendedParameters(deviceInfo[deviceIdx], 0.5, settings)
 
@@ -320,11 +328,11 @@ def main():
     parameters["RUN_FROM_PYTHON"] = 1 # this should never be changed
 
     if needToRecompile(parameters):
-        command = 'nvcc prime_gaps.cu -o prime_gaps_py.out'
+        command = f'nvcc {MAIN_CUDA_FILE} -o prime_gaps_py.out'
         for param, value in parameters.items():
             command += f" -D{param}={value}"
         
-        print(f"Compiling with command: '{Style.BRYELLOW}{command}{Style.RESET}'")
+        print(f"Compiling {MAIN_CUDA_FILE} with command: '{Style.BRYELLOW}{command}{Style.RESET}'")
         p = subp.run(command.split(), stdout=subp.PIPE, bufsize=1, universal_newlines=True)
         if p.returncode != 0:
             raise subp.CalledProcessError(p.returncode, p.args)
@@ -333,14 +341,19 @@ def main():
     else:
         print("Skipping recompilation")
 
-    with open("worktodo.txt") as f:
+    with open(WORKTODO_FILE) as f:
         lines = f.read().split('\n')
     
     for line in lines:
         line = line.split("#")[0].strip()
         if not line: continue
         start, end, minGap = map(int, line.split(","))
-        print(f"Running work unit: '{line}'")
+
+        msg = ""
+        if os.path.exists(getReportFileName(start, end, minGap)):
+            msg = f"| {Style.BRGREEN}This work unit has already been completed!{Style.RESET}"
+
+        print(f"Running work unit: '{line}' {msg}")
         results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx)
         print("\nSaving to file... ", end='')
         writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"])
