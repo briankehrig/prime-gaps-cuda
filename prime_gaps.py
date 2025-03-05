@@ -4,6 +4,8 @@ import os
 import subprocess as subp
 import sys
 
+# TODO: WRITE README.MD
+
 LAST_PARAMS_FILE = "_LAST_PARAMS"
 WORKTODO_FILE = "worktodo.txt"
 SETTINGS_FILE = "settings.json"
@@ -45,6 +47,12 @@ class Style:
     def RGB(r,g,b):
         return f'\033[38;2;{r};{g};{b}m'
 
+def printWarn(thing, *args, **kwargs):
+    print(Style.YELLOW+thing+Style.RESET, *args, **kwargs)
+
+def printError(thing, *args, **kwargs):
+    print(Style.BRRED+thing+Style.RESET, *args, **kwargs)
+
 def getStdoutWhileRunning(cmd):
     with subp.Popen(cmd, stdout=subp.PIPE, bufsize=1, universal_newlines=True) as p:
         for line in p.stdout:
@@ -74,6 +82,7 @@ def getDeviceInfo():
         print(f"Compiling {DEVICE_PROPERTIES_FILE} with command: "
               f"{Style.BRYELLOW}'nvcc {DEVICE_PROPERTIES_FILE} -o device_properties.out'{Style.RESET}")
         subp.run(["nvcc", DEVICE_PROPERTIES_FILE, "-o", "device_properties.out"])
+    
     for line in getStdoutWhileRunning(["./device_properties.out"]):
         line = line.split()
         if line[0] == "NewDevice":
@@ -144,31 +153,40 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
     return recommended
 
 def sanityCheckParameters(parameters, minGap):
-    if minGap < 1200 and parameters["WORD_LENGTH"] != 120:
-        print(f"WARNING: WORD_LENGTH={parameters['WORD_LENGTH']} and minGap<1200 do not mix well. Try setting WORD_LENGTH=120.")
+    if minGap % (parameters["WORD_LENGTH"] // 4) != 0:
+        printError(f"ERROR: minGap must be a multiple of {parameters['WORD_LENGTH'] // 4} = WORD_LENGTH/4")
+        sys.exit(1)
+
+    if minGap < 960 and parameters["WORD_LENGTH"] != 120:
+        printWarn(f"WARNING: If WORD_LENGTH={parameters['WORD_LENGTH']} and minGap<960, the search is likely to be very slow. "
+                  f"\nNote: Try setting WORD_LENGTH=120.")
+
+    elif minGap < 1200 and parameters["WORD_LENGTH"] != 120:
+        printWarn(f"WARNING: If WORD_LENGTH={parameters['WORD_LENGTH']} and minGap<1200, the search could be slow (if you have a fast GPU). "
+                  f"Note: Try setting WORD_LENGTH=120.")
     
     if minGap >= 1200 and parameters["WORD_LENGTH"] == 120:
-        print(f"WARNING: With a large minGap (>=1200) you can (and should) optimize speed by setting WORD_LENGTH=240.")
+        printWarn(f"WARNING: With a large minGap (>=1200) you can (and should) optimize speed by setting WORD_LENGTH=240.")
 
     if parameters["SMALL_PRIME_WHEELS"] not in (3,4):
-        print(f"WARNING: SMALL_PRIME_WHEELS should always be either 3 or 4")
+        printWarn(f"WARNING: SMALL_PRIME_WHEELS should always be either 3 or 4")
 
     if parameters["SHARED_SIZE_WORDS"] not in (8192,9216,10240,11264,12288):
-        print(f"WARNING: SHARED_SIZE_WORDS should be 8-12 times a multiple of 1024 to optimize speed")
+        printWarn(f"WARNING: SHARED_SIZE_WORDS should be 8-12 times a multiple of 1024 to optimize speed")
 
     if parameters["NUM_MEDIUM_PRIMES_BASE"] % 512:
-        print(f"ERROR: NUM_MEDIUM_PRIMES_BASE must be a multiple of 512")
+        printError(f"ERROR: NUM_MEDIUM_PRIMES_BASE must be a multiple of 512")
         sys.exit(1)
 
     if parameters["PROPORTION_OF_BLOCKS_FOR_SIEVING"] not in (0.5,0.75):
-        print(f"WARNING: PROPORTION_OF_BLOCKS_FOR_SIEVING should be 0.5 (sometimes 0.75) to optimize speed")
+        printWarn(f"WARNING: PROPORTION_OF_BLOCKS_FOR_SIEVING should be 0.5 (sometimes 0.75) to optimize speed")
 
     if parameters["PROGRESS_EVERY"] != 1:
-        print(f"ERROR: PROGRESS_EVERY must be 1")
+        printError(f"ERROR: PROGRESS_EVERY must be 1")
         sys.exit(1)
 
     if parameters["RUN_FROM_PYTHON"] != 1:
-        print(f"ERROR: RUN_FROM_PYTHON must be 1")
+        printError(f"ERROR: RUN_FROM_PYTHON must be 1")
         sys.exit(1)
 
 def progressBar(length, progress):
@@ -269,7 +287,6 @@ def writeOutputFile(parameters, start, end, minGap, results, reportOptions):
         largest.sort(key=lambda x: x[2])
         if reportOptions["SORT_OUTPUT_BY_GAPSIZE"]:
             results.sort(key=lambda x: x[0], reverse=True)
-            assert False
         else:
             results.sort(key=lambda x: x[2])
         # we recalculate the merit here, because we don't want to round it twice and get incorrect results
@@ -357,7 +374,7 @@ def main():
         results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx)
         print("\nSaving to file... ", end='')
         writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"])
-        print("done")
+        print("Done")
 
     print()
 

@@ -43,7 +43,7 @@
     "ReportOptions": {
         // Whether to sort the gaps in the output file by their gap size.
         // If not, it will sort by the size of the prime (i.e. "chronologically").
-        "SORT_OUTPUT_BY_GAPSIZE": false,
+        "SORT_OUTPUT_BY_GAPSIZE": true,
 
         // Your name
         "NAME": "B.Kehrig"
