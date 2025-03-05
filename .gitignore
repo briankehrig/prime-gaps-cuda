@@ -7,3 +7,12 @@
 *.ncu-rep
 *.nsys-rep
 output/*
+reports/*
+
+.vscode
+
+*.out
+*.o
+
+fermat
+fermat.*
