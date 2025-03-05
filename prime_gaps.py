@@ -365,6 +365,15 @@ def main():
         line = line.split("#")[0].strip()
         if not line: continue
         start, end, minGap = map(int, line.split(","))
+        if start >= end:
+            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be < end)")
+            continue
+        if start*10**12 < 2**64:
+            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >2^64)")
+            continue
+        if end*10**12 > 2**65:
+            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be <2^65)")
+            continue
 
         msg = ""
         if os.path.exists(getReportFileName(start, end, minGap)):
