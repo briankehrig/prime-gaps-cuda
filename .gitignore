@@ -8,6 +8,7 @@
 *.nsys-rep
 output/*
 reports/*
+_LAST_PARAMS
 
 .vscode
 

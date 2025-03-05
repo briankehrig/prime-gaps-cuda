@@ -4,6 +4,8 @@ import os
 import subprocess as subp
 import sys
 
+LAST_PARAMS_FILE = "_LAST_PARAMS"
+
 class Style:
     RESET = '\033[0m'
     BOLD = '\033[1m'
@@ -138,10 +140,10 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
 
 def sanityCheckParameters(parameters, minGap):
     if minGap < 1200 and parameters["WORD_LENGTH"] != 120:
-        print(f"WARNING: WORD_LENGTH={parameters['WORD_LENGTH']} and minGap<1200 do not mix well.")
+        print(f"WARNING: WORD_LENGTH={parameters['WORD_LENGTH']} and minGap<1200 do not mix well. Try setting WORD_LENGTH=120.")
     
     if minGap >= 1200 and parameters["WORD_LENGTH"] == 120:
-        print(f"WARNING: With a large minGap (>=1200) you can probably gain more speed by setting WORD_LENGTH=240.")
+        print(f"WARNING: With a large minGap (>=1200) you can (and should) optimize speed by setting WORD_LENGTH=240.")
 
     if parameters["SMALL_PRIME_WHEELS"] not in (3,4):
         print(f"WARNING: SMALL_PRIME_WHEELS should always be either 3 or 4")
@@ -196,9 +198,9 @@ def printProgress(proportionDone, currentlyAt, top5, speed, eta):
     )
 
 def needToRecompile(parameters):
-    if not os.path.exists("_LASTPARAMS"): return True
-    if os.path.getmtime("prime_gaps.cu") > os.path.getmtime("_LASTPARAMS"): return True
-    with open("_LASTPARAMS") as f:
+    if not os.path.exists(LAST_PARAMS_FILE): return True
+    if os.path.getmtime("prime_gaps.cu") > os.path.getmtime(LAST_PARAMS_FILE): return True
+    with open(LAST_PARAMS_FILE) as f:
         return json.loads(f.read()) != parameters
 
 def runOne(parameters, start, end, minGap, deviceIdx):
@@ -326,7 +328,7 @@ def main():
         p = subp.run(command.split(), stdout=subp.PIPE, bufsize=1, universal_newlines=True)
         if p.returncode != 0:
             raise subp.CalledProcessError(p.returncode, p.args)
-        with open("_LASTPARAMS", "w") as f:
+        with open(LAST_PARAMS_FILE, "w") as f:
             f.write(json.dumps(parameters))
     else:
         print("Skipping recompilation")
