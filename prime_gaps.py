@@ -365,7 +365,12 @@ def main():
     for line in lines:
         line = line.split("#")[0].strip()
         if not line: continue
-        data = list(map(int, line.split(",")))
+        try:
+            data = list(map(int, line.split(",")))
+        except ValueError:
+            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (not a number)")
+            continue
+
         if len(data) > 4:
             printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (too many arguments)")
             continue
