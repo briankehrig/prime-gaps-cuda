@@ -5,6 +5,7 @@ import subprocess as subp
 import sys
 
 # TODO: WRITE README.MD
+# TODO: DETECT SHARED MEMORY SIZE
 
 LAST_PARAMS_FILE = "_LAST_PARAMS"
 WORKTODO_FILE = "worktodo.txt"
@@ -364,7 +365,17 @@ def main():
     for line in lines:
         line = line.split("#")[0].strip()
         if not line: continue
-        start, end, minGap = map(int, line.split(","))
+        data = list(map(int, line.split(",")))
+        if len(data) > 4:
+            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (too many arguments)")
+            continue
+        if len(data) < 3:
+            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (too few arguments)")
+            continue
+
+        if len(data) == 4 and data[3] != deviceIdx:
+            continue # this work unit is not for us to do
+        start, end, minGap = data[:3]
         if start >= end:
             printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be < end)")
             continue

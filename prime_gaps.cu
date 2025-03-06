@@ -76,8 +76,6 @@ typedef unsigned __int128 uint128_t;
 #define SIEVING_DUPLICATED_PRIMES 392
 #endif
 
-// TODO: THESE ARRAYS HAVE TO CHANGE BASED ON WORD_LENGTH!!
-
 __constant__ uint8_t SIEVE_VALUE_TO_POS[WORD_LENGTH/2];
 
 __constant__ uint8_t SIEVE_POS_TO_VALUE[32];
@@ -567,7 +565,6 @@ __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengt
         if (startByte >= p) startByte -= p;
         uint8_t mask = 1 << bit;
         for (int32_t byte=startByte; byte<sieveLengthWords*4; byte += p) {
-            // TODO: Have multiple running counters so that we don't have to do mods?? will that even help?
             atomicOr(&sieve[byte/4], mask << ((byte%4)*8));
         }
     }
@@ -1549,7 +1546,7 @@ int main(int argc, char* argv[]) {
     );
     HANDLE_ERROR(cudaDeviceSynchronize());
 
-    uint128_t lastPrimeInLastBlock = 0; // TODO: CALCULATE ON CPU THE LAST PRIME BEFORE THE STARTING POINT OF BLOCK 0
+    uint128_t lastPrimeInLastBlock = 0;
 
 #if RUN_TESTS
     int blocksToTest = 4;
