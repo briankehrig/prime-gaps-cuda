@@ -6,7 +6,6 @@ import subprocess as subp
 import sys
 
 # TODO: DETECT SHARED MEMORY SIZE
-# TODO: targetMemoryUsage should take into account small prime wheels
 
 LAST_PARAMS_FILE = "_LAST_PARAMS"
 WORKTODO_FILE = "worktodo.txt"
@@ -148,7 +147,8 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
     recommended["GPU_BLOCKS"] = gpuBlocks
 
     # we divide targetMemoryUsage by 2 since we will have 2 lists in memory at the same time
-    blockSize = int(deviceInfo["GlobalMemGB"]*2**30 * targetMemoryUsage/2) * recommended["WORD_LENGTH"]//4
+    # we first subtract 1.5 GB since that's about how much the small prime wheels take up
+    blockSize = int((deviceInfo["GlobalMemGB"]-1.5)*2**30 * targetMemoryUsage/2) * recommended["WORD_LENGTH"]//4
     blockSize -= blockSize % (recommended["SHARED_SIZE_WORDS"] * recommended["GPU_BLOCKS"])
     recommended["BLOCK_SIZE"] = blockSize
 
@@ -345,7 +345,7 @@ def main():
     
     with open(SETTINGS_FILE) as f:
         settings = json.loads(removeDoubleSlashComments(f.read()))
-    parameters = getRecommendedParameters(deviceInfo[deviceIdx], 0.5, settings)
+    parameters = getRecommendedParameters(deviceInfo[deviceIdx], 0.75, settings)
 
     for setting in settings["KernelOptions"]:
         if settings["KernelOptions"][setting] != -1:

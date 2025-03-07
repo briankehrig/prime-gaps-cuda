@@ -1,6 +1,6 @@
 # prime-gaps-cuda
 
-This repository is a highly optimized GPU-accelerated program for finding large prime gaps.
+A highly optimized GPU-accelerated program for finding large prime gaps.
 
 # Setup
 This code is linux-only. However, if you have Windows, it works great on WSL. However, since the code is GPU-based, you will need a GPU. Specifically, you'll need a CUDA-capable NVIDIA GPU.
@@ -22,7 +22,7 @@ However, there are two files you will have to edit before you start running actu
 worktodo.txt lists all the work that will be done by the program.
 worktodo.txt contains lines of the following format:
 `startNum,endNum,minGap,[deviceNum]`
- `startNum` and `endNum` are multiplied by 10^12^. This means, for example, a work unit of `23456789,23457000,1200` will find all gaps between `23456789000000000000` and `23457000000000000000` of length >=1200. In the case of a large gap that straddles the border of a work unit, what matters is whether the *smaller* prime is inside the work unit boundaries.
+`startNum` and `endNum` are multiplied by 10^12^. This means, for example, a work unit of `23456789,23457000,1200` will find all gaps between `23456789000000000000` and `23457000000000000000` of length >=1200. In the case of a large gap that straddles the border of a work unit, what matters is whether the *smaller* prime is inside the work unit boundaries.
 ## settings.json
 This is where you can configure several variables that can greatly affect the program's performance. If you set them to -1, the code will automatically try to estimate a good value, but I would recommend tweaking the values until you find the fastest possible parameters for your GPU. 
 ### Configurable settings
