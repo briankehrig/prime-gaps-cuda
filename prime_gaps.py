@@ -1,11 +1,12 @@
+import datetime
 import json
 import math
 import os
 import subprocess as subp
 import sys
 
-# TODO: WRITE README.MD
 # TODO: DETECT SHARED MEMORY SIZE
+# TODO: targetMemoryUsage should take into account small prime wheels
 
 LAST_PARAMS_FILE = "_LAST_PARAMS"
 WORKTODO_FILE = "worktodo.txt"
@@ -268,7 +269,12 @@ def runOne(parameters, start, end, minGap, deviceIdx):
 def getReportFileName(start, end, minGap):
     return f"reports/GapReport_{start}e12_{end}e12_{minGap}.txt"
 
-def writeOutputFile(parameters, start, end, minGap, results, reportOptions):
+def formatDatetime(dt):
+    months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+    return f"{dt.date().year:4d}-{months[dt.date().month-1]}-{dt.date().day:02d} " \
+           f"{dt.time().hour:02d}:{dt.time().minute:02d}:{dt.time().second:02d}.{dt.time().microsecond//1000:03d} UTC"
+
+def writeOutputFile(parameters, start, end, minGap, results, reportOptions, startTime, endTime):
     fname = getReportFileName(start, end, minGap)
 
     kernelParams = "\n".join(f"    {key}={value}" for key, value in parameters.items())
@@ -300,6 +306,9 @@ def writeOutputFile(parameters, start, end, minGap, results, reportOptions):
     contents = f"""======== PRIME GAP REPORT ========
 
 Name: {reportOptions['NAME']}
+
+Start time: {formatDatetime(startTime)}
+End time: {formatDatetime(endTime)}
 
 Kernel parameters:
 {kernelParams}
@@ -396,9 +405,11 @@ def main():
             msg = f"| {Style.BRGREEN}This work unit has already been completed!{Style.RESET}"
 
         print(f"Running work unit: '{line}' {msg}")
+        startTime = datetime.datetime.utcnow()
         results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx)
+        endTime = datetime.datetime.utcnow()
         print("\nSaving to file... ", end='')
-        writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"])
+        writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"], startTime, endTime)
         print("Done")
 
     print()

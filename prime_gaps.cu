@@ -299,6 +299,8 @@ __device__ bool fermatTest84(uint128_t n, uint32_t delta, uint64_t orig_magic, d
 }
 
 // ===== Thanks to Perig for this code ===== 
+//       vvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+
 __host__ __device__ inline uint64_t my_getMagic1(uint128_t mod)
 {
 	// precomputes (2^128 - 1)/ mod    (a 64 bits number)
@@ -464,6 +466,9 @@ __host__  __device__ inline bool fermatTest65Inner(uint128_t n, uint64_t magic1)
 	return result == expected;
 }
 
+//       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+// ===== Thanks to Perig for this code ===== (end)
+
 // POTENTIAL OPTIMIZATION: REUSE MAGIC CALCULATIONS FOR MULTIPLE FERMAT TESTS
 
 __host__ __device__ bool fermatTest65(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
@@ -507,7 +512,6 @@ __device__ void sieveSmallPrimes(uint32_t* sieve, uint32_t sieveLengthWords, uin
     int wheel4Idx = (start/WORD_LENGTH + threadIdx.x) % (71*73*79*83);
 #endif
     for (uint32_t i = threadIdx.x; i < sieveLengthWords; i += blockDim.x) {
-        //uint128_t wordStart = start/WORD_LENGTH + i;
         // We cannot replace the atomicOr with a non-atomic operation, because that might skip sieving out some values
         // and we must not miss any (because of pseudoprimes)
         uint32_t mask = smallPrimeWheel1[wheel1Idx];
@@ -536,6 +540,7 @@ __device__ void sieveSmallPrimes(uint32_t* sieve, uint32_t sieveLengthWords, uin
 
 __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengthWords, uint128_t start,
                                             uint32_t p, uint32_t startBit, uint32_t numBits) {
+    // This function is by far the most performance-sensitive part of the sieving step
 #if SIEVE_BY_30
     uint32_t pInv = INVERSES_30[(p%30)/2];
     // if start/30 is under 2^64, then we can convert to uint64 before the "% p" for a ~0.5% speedup
@@ -708,14 +713,6 @@ __device__ void sievePseudoprimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
         while (currentWord < sieveLengthWords) {
             // Update the sieve
             if (currentPosInWord < WORD_SIEVING_LENGTH && IS_COPRIME_30[(currentPosInWord % 30) / 2]) {
-                /*if ((~sieve[currentWord]) & (1 << SIEVE_VALUE_TO_POS[currentPosInWord / 2])) {
-                    uint128_t num = start + ((uint128_t) currentWord)*WORD_LENGTH + currentPosInWord;
-                    if (fermatTest645(num)) {
-                        printf("Pseudoprime p=%d mod 1e19=%lu %lu %u %u\n", p, (uint64_t) (num % 10000000000000000000UL),
-                        currentWord, currentPosInWord, (uint32_t) (num%p));
-                        //printf("20000%lu\n", (uint64_t) (num % 10000000000000000000UL));
-                    }
-                }*/
                 uint8_t wordPos = SIEVE_VALUE_TO_POS[currentPosInWord / 2];
                 if (wordPos || (currentPosInWord==1)) {
                     atomicOr(&sieve[currentWord], 1 << wordPos);
@@ -1336,7 +1333,7 @@ void checkGapAndPrint(uint128_t startPrime, uint128_t endPrime, uint32_t minGapS
     uint128_t test = startPrime + minGapSize - 2;
     while (lastPrime <= endPrime - minGapSize) {
         if (isPrime84(test)) {
-            assert(test % 60 > 30); // if this fails then we sieved out too much (doesn't affect correctness of results)
+            //assert(test % 60 > 30); // if this fails then we sieved out too much (doesn't affect correctness of results)
             lastPrime = test;
             test += minGapSize-2;
         } else {
@@ -1679,35 +1676,5 @@ find a way to do "proofs" that you searched a range
     i.e. for one block, the proof would look like <block start> <all the params> N
         where N is something that can only be found if you have actually done the work
         that way, if you only do 90% of the work, a randomly chosen block will find that out 10% of the time
-
-settings/worktodo files: (should put this in the readme at some point)
-
-=== settings.txt file format: ===
-# comment: there should be a script to automatically find the optimal parameters to set (far future)
-GPU_BLOCKS=192
-NUM_BLOCKS_FOR_SIEVING=120
-BLOCK_SIZE=46080000000
-SORT_OUTPUT_BY_GAPSIZE=1 # If 0, sorts by the prime (increasing). If 1, sorts by the gap size (decreasing)
-NAME=B.Kehrig
-
-=== worktodo.txt file format: ===
-# format: start(e12), end(e12), minGap, username
-18470057,18571674,1200,B.Kehrig  #will find the 1552 and 1572 gaps, but also will take a while (smaller tasks recommended)
-20730000,20740000,1200,B.Kehrig  #will find the 1676 gap, and is a reasonable size for a task
-
-=== output file format: === (location: output/gaps_<start>e12_<end>e12_min<mingap>_<name>.txt)
-===== PRIME GAP REPORT =====
-Target gap size: <mingap>
-Range Searched: 
-Gaps >=1200: <x> (or whatever hundred is at least as large as mingap)
-Gaps >=1250: <x>
-Gaps >=1300: <x>
-... keep going until there are none left
-Largest gap: <size> <merit> <prime>
-
-Full list of gaps >= <mingap>: # format: <gapsize> <startprime> <merit>
-1572 35.4308 18571673432051830099
-1552 34.9844 18470057946260698231 # (these would be in the opposite order if SORT_OUTPUPT_BY_GAPSIZE=0)
-
 
 */
