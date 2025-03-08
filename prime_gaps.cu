@@ -970,10 +970,6 @@ __device__ void findGaps(uint32_t* sieve, uint128_t start, uint64_t sieveLengthW
                 upperPrime = getNumberFromSieve(start, bitPosition);
             }
             uint32_t gap = (uint32_t) (upperPrime - lastPrime);
-            if (upperPrime%1000000000 == 348894167) {
-                // tidx == 1719
-                //printf("kasdhkfahsdfkjasjkfd %lu %lu %lu %d\n", lo19(upperPrime), bitPosition, limitBitPosition, tidx);
-            }
             
             int resultIdx = atomicAdd(&resultList[0].gap, 1) + 1; // index 0 of the list keeps track of the length
             //assert(resultIdx != RESULT_LIST_SIZE-1); // will raise an error if we overflow the result list capacity

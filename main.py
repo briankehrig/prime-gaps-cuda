@@ -1,16 +1,22 @@
-import datetime
+import datetime as dt
 import json
 import math
 import os
 import subprocess as subp
 import sys
 
-# TODO: DETECT SHARED MEMORY SIZE
+# TODO: Detect shared memory size
+# TODO: Detect duplicated work units with different device IDs
+# TODO: Make a way to save progress for long work units in case it crashes
 
 WORKTODO_FILE = "worktodo.txt"
 SETTINGS_FILE = "settings.json"
 MAIN_CUDA_FILE = "prime_gaps.cu"
 DEVICE_PROPERTIES_FILE = "device_properties.cu"
+def getLastParamsFile(deviceId):
+    return f"_LAST_PARAMS_{deviceId}"
+def getCompiledCudaFile(deviceId):
+    return f"prime_gaps_{deviceId}.out"
 
 class Style:
     RESET = '\033[0m'
@@ -189,12 +195,6 @@ def sanityCheckParameters(parameters, minGap):
     if parameters["RUN_FROM_PYTHON"] != 1:
         printError(f"ERROR: RUN_FROM_PYTHON must be 1")
         sys.exit(1)
-
-def getLastParamsFile(deviceId):
-    return f"_LAST_PARAMS_{deviceId}"
-
-def getCompiledCudaFile(deviceId):
-    return f"prime_gaps_{deviceId}.out"
 
 def progressBar(length, progress):
     filled = min(length, int(progress*(length+1)))
@@ -404,15 +404,19 @@ def main():
         if end*10**12 > 2**65:
             printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be <2^65)")
             continue
+        if minGap % (parameters["WORD_LENGTH"]//4):
+            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' "
+                      f"(minGap must be a multiple of {parameters['WORD_LENGTH']//4})")
+            continue
 
         msg = ""
         if os.path.exists(getReportFileName(start, end, minGap)):
             msg = f"| {Style.BRGREEN}This work unit has already been completed!{Style.RESET}"
 
         print(f"Running work unit: '{line}' {msg}")
-        startTime = datetime.datetime.utcnow()
+        startTime = dt.datetime.utcnow()
         results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx)
-        endTime = datetime.datetime.utcnow()
+        endTime = dt.datetime.utcnow()
         print("\nSaving to file... ", end='')
         writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"],
                         startTime, endTime, deviceInfo[deviceIdx]["Name"])
