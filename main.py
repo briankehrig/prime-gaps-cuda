@@ -280,7 +280,7 @@ def formatDatetime(dt):
     return f"{dt.date().year:4d}-{months[dt.date().month-1]}-{dt.date().day:02d} " \
            f"{dt.time().hour:02d}:{dt.time().minute:02d}:{dt.time().second:02d}.{dt.time().microsecond//1000:03d} UTC"
 
-def writeOutputFile(parameters, start, end, minGap, results, reportOptions, startTime, endTime):
+def writeOutputFile(parameters, start, end, minGap, results, reportOptions, startTime, endTime, gpuName):
     fname = getReportFileName(start, end, minGap)
 
     kernelParams = "\n".join(f"    {key}={value}" for key, value in parameters.items())
@@ -312,10 +312,9 @@ def writeOutputFile(parameters, start, end, minGap, results, reportOptions, star
     contents = f"""======== PRIME GAP REPORT ========
 
 Name: {reportOptions['NAME']}
-
 Start time: {formatDatetime(startTime)}
 End time: {formatDatetime(endTime)}
-
+GPU: {gpuName}
 Kernel parameters:
 {kernelParams}
 
@@ -415,7 +414,8 @@ def main():
         results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx)
         endTime = datetime.datetime.utcnow()
         print("\nSaving to file... ", end='')
-        writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"], startTime, endTime)
+        writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"],
+                        startTime, endTime, deviceInfo[deviceIdx]["Name"])
         print("Done")
 
     print()
