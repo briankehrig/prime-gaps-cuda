@@ -6,7 +6,7 @@ A highly optimized GPU-accelerated program for finding large prime gaps.
 This code is linux-only. However, if you have Windows, it works great on WSL. However, since the code is GPU-based, you will need a GPU. Specifically, you'll need a CUDA-capable NVIDIA GPU.
 The code in this repo is designed to be easy to plug-and-go. There are only two things you have to install before you are ready to run the code: CUDA and python.
 
-To install CUDA, follow the instructions on [this page](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/#ubuntu-installation), specifically section 3.
+To install CUDA, follow the instructions on [this page](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/#package-manager-installation), specifically section 3.
 
 There are a few ways you can get a Python environment set up, but here is a simple one. Any relatively recent Python 3 version will work fine.
 - `sudo apt update` (update the package lists)
