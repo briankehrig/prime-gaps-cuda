@@ -6,9 +6,10 @@
 *.fatbin
 *.ncu-rep
 *.nsys-rep
+
 output/*
 reports/*
-_LAST_PARAMS
+_LAST_PARAMS*
 
 .vscode
 
