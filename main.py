@@ -288,9 +288,10 @@ def runOne(parameters, start, end, minGap, deviceIdx, logFilename, startTime, sk
                 totalSpeed = speedFactor*speed + (1-speedFactor)*totalSpeed
             eta = 0 if speed==0 else parameters["BLOCK_SIZE"] * (blocksToTest - blocksDone) / (speed * 1e9)
             printProgress(blocksDone/blocksToTest, currentlyAt, top5, totalSpeed, eta)
-            dataToLog += f"Progress {currentlyAt} {blocksDone} {blocksToTest}\n"
-            printLog(dataToLog)
-            dataToLog = ""
+            if blocksDone % 10 == 0:
+                dataToLog += f"Progress {currentlyAt} {blocksDone} {blocksToTest}\n"
+                printLog(dataToLog)
+                dataToLog = ""
         elif line[0] == ":":
             p = int(line[1])
             gap = int(line[2])
