@@ -139,7 +139,7 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
     recommended = {"WORD_LENGTH": settings["KernelOptions"]["WORD_LENGTH"]}
     recommended["WORD_LENGTH"] = recommended["WORD_LENGTH"] if recommended["WORD_LENGTH"] != -1 else 240
 
-    if "Titan V" in deviceInfo["Name"]:
+    if "TITAN V" in deviceInfo["Name"]:
         recommended["SHARED_SIZE_WORDS"] = 12288
     elif "GTX 1660" in deviceInfo["Name"]:
         recommended["SHARED_SIZE_WORDS"] = 8192
