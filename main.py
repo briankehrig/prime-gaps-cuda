@@ -283,8 +283,8 @@ def runOne(parameters, start, end, minGap, deviceIdx, logFilename, startTime, sk
             if blocksDone >= blocksToTest-1:
                 # the last 2 blocks are a lot faster due to how the code works, so we ignore their speed
                 speed = totalSpeed
-            if blocksDone:
-                speedFactor = 1/blocksDone**0.5
+            if blocksDone - skippedBlocks:
+                speedFactor = 1/(blocksDone - skippedBlocks)**0.5
                 totalSpeed = speedFactor*speed + (1-speedFactor)*totalSpeed
             eta = 0 if speed==0 else parameters["BLOCK_SIZE"] * (blocksToTest - blocksDone) / (speed * 1e9)
             printProgress(blocksDone/blocksToTest, currentlyAt, top5, totalSpeed, eta)
@@ -425,6 +425,7 @@ def main():
             newStart = int(logdata[-2].split()[1])
 
             top5 = sorted([f"{r[0]:4d}" for r in results], reverse=True, key=lambda x: int(x) if x != "----" else 0)[:5]
+            top5 += ["----"] * (5-len(top5))
             print(f"Finishing work unit from log file: '{logfile}'")
             startTime = dt.datetime.now(dt.timezone.utc)
             results += runOne(parameters, newStart, end*10**12, minGap,
