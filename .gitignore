@@ -9,6 +9,7 @@
 
 output/*
 reports/*
+logs/*
 _LAST_PARAMS*
 
 .vscode

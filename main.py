@@ -17,6 +17,12 @@ def getLastParamsFile(deviceId):
     return f"_LAST_PARAMS_{deviceId}"
 def getCompiledCudaFile(deviceId):
     return f"prime_gaps_{deviceId}.out"
+def getFilenameSuffix(start, end, minGap):
+    return f"{start}e12_{end}e12_{minGap}.txt"
+def getReportFileName(start, end, minGap):
+    return f"reports/GapReport_" + getFilenameSuffix(start, end, minGap)
+def getLogFileName(start, end, minGap):
+    return f"logs/log_" + getFilenameSuffix(start, end, minGap)
 
 class Style:
     RESET = '\033[0m'
@@ -227,27 +233,51 @@ def printProgress(proportionDone, currentlyAt, top5, speed, eta):
           end=''
     )
 
-def needToRecompile(parameters, deviceId):
-    fname = getLastParamsFile(deviceId)
+def needToRecompile(parameters, deviceIdx):
+    fname = getLastParamsFile(deviceIdx)
     if not os.path.exists(fname): return True
     if os.path.getmtime(MAIN_CUDA_FILE) > os.path.getmtime(fname): return True
     with open(fname) as f:
         return json.loads(f.read()) != parameters
 
-def runOne(parameters, start, end, minGap, deviceIdx):
+def recompile(parameters, deviceIdx):
+    if needToRecompile(parameters, deviceIdx):
+        command = f'nvcc {MAIN_CUDA_FILE} -o {getCompiledCudaFile(deviceIdx)}'
+        for param, value in parameters.items():
+            command += f" -D{param}={value}"
+        
+        print(f"Compiling {MAIN_CUDA_FILE} with command: '{Style.BRYELLOW}{command}{Style.RESET}'")
+        p = subp.run(command.split(), stdout=subp.PIPE, bufsize=1, universal_newlines=True)
+        if p.returncode != 0:
+            raise subp.CalledProcessError(p.returncode, p.args)
+        with open(getLastParamsFile(deviceIdx), "w") as f:
+            f.write(json.dumps(parameters))
+
+def runOne(parameters, start, end, minGap, deviceIdx, logFilename, startTime, skippedBlocks=0, startTop5=None):
+    if start >= end: return []
     start -= start % parameters["WORD_LENGTH"]
-    blocksToTest = (end - start - 1) // parameters["BLOCK_SIZE"] + 1
+    blocksToTest = (end - start - 1) // parameters["BLOCK_SIZE"] + 1 + skippedBlocks
     totalSpeed = 0
-    top5 = ["----"] * 5
+    top5 = ["----"] * 5 if startTop5 is None else startTop5
     allResults = []
     sanityCheckParameters(parameters, minGap)
+
+    def printLog(data):
+        with open(logFilename, "a") as f:
+            f.write(data)
+
+    if not os.path.exists(logFilename):
+        printLog(f"{deviceIdx}\n{json.dumps(parameters)}\n{startTime}\n")
+    dataToLog = ""
+
     for line in getStdoutWhileRunning(
-        ['./'+getCompiledCudaFile(deviceIdx), str(minGap), str(start), str(blocksToTest), str(deviceIdx)]
+        ['./'+getCompiledCudaFile(deviceIdx), str(minGap), str(start),
+         str(blocksToTest - skippedBlocks), str(deviceIdx)]
     ):
         #print(line, end='')
         line = line.split()
         if line[0] == "Progress":
-            blocksDone = int(line[1])
+            blocksDone = int(line[1]) + skippedBlocks
             currentlyAt = int(line[2])
             speed = float(line[3]) if len(line)>3 else 0
             if blocksDone >= blocksToTest-1:
@@ -258,22 +288,24 @@ def runOne(parameters, start, end, minGap, deviceIdx):
                 totalSpeed = speedFactor*speed + (1-speedFactor)*totalSpeed
             eta = 0 if speed==0 else parameters["BLOCK_SIZE"] * (blocksToTest - blocksDone) / (speed * 1e9)
             printProgress(blocksDone/blocksToTest, currentlyAt, top5, totalSpeed, eta)
+            dataToLog += f"Progress {currentlyAt} {blocksDone} {blocksToTest}\n"
+            printLog(dataToLog)
+            dataToLog = ""
         elif line[0] == ":":
             p = int(line[1])
             gap = int(line[2])
+            merit = float(line[3])
             top5 = sorted(top5+[f"{gap:4d}"], reverse=True, key=lambda x: int(x) if x != "----" else 0)[:5]
             if p < end:
-                newResult = (gap, float(line[3]), p)
+                newResult = (gap, merit, p)
                 if newResult[2] == 0:
                     # on my GPU, this happens if minGapSize is 360 or lower with WORD_LENGTH==120
                     raise "ERROR: Something weird happened, maybe you set minGapSize too low?"
-                allResults.append((gap, float(line[3]), p))
+                allResults.append((gap, merit, p))
+                dataToLog += f"Gap {gap} {merit:.4f} {p}\n"
         elif line[0] == "ERROR:":
             print(' '.join(line))
     return allResults
-
-def getReportFileName(start, end, minGap):
-    return f"reports/GapReport_{start}e12_{end}e12_{minGap}.txt"
 
 def formatDatetime(dt):
     months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
@@ -336,12 +368,17 @@ def main():
     if len(sys.argv) < 2:
         print("Device index not specified, defaulting to 0. Try running 'python3 prime_gaps.py <deviceIdx>'")
         deviceIdx = 0
-    elif len(sys.argv) > 2:
-        print("Usage: 'python3 prime_gaps.py [deviceIdx]'")
-        print(f"See {SETTINGS_FILE} for more info on configuration.")
+        runMode = 'run'
+    elif len(sys.argv) > 3:
+        print("Usage: 'python3 prime_gaps.py [deviceIdx] [mode]'")
+        print("'mode' can be one of ('run', 'continue'). Defaults to 'run'.")
         return
     else:
         deviceIdx = int(sys.argv[1])
+        runMode = 'run' if len(sys.argv) <= 2 else sys.argv[2]
+        if runMode not in ("run", "continue"):
+            print(f"Unknown mode {runMode} is not one of ('run', 'continue')")
+            return
     
     deviceInfo = getDeviceInfo()
     if deviceIdx >= len(deviceInfo):
@@ -359,68 +396,105 @@ def main():
     parameters["PROGRESS_EVERY"] = 1 # this should never be changed
     parameters["RUN_FROM_PYTHON"] = 1 # this should never be changed
 
-    if needToRecompile(parameters, deviceIdx):
-        command = f'nvcc {MAIN_CUDA_FILE} -o {getCompiledCudaFile(deviceIdx)}'
-        for param, value in parameters.items():
-            command += f" -D{param}={value}"
-        
-        print(f"Compiling {MAIN_CUDA_FILE} with command: '{Style.BRYELLOW}{command}{Style.RESET}'")
-        p = subp.run(command.split(), stdout=subp.PIPE, bufsize=1, universal_newlines=True)
-        if p.returncode != 0:
-            raise subp.CalledProcessError(p.returncode, p.args)
-        with open(getLastParamsFile(deviceIdx), "w") as f:
-            f.write(json.dumps(parameters))
-    else:
-        print("Skipping recompilation")
-
-    with open(WORKTODO_FILE) as f:
-        lines = f.read().split('\n')
     
-    for line in lines:
-        line = line.split("#")[0].strip()
-        if not line: continue
-        try:
-            data = list(map(int, line.split(",")))
-        except ValueError:
-            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (not a number)")
-            continue
+    if runMode == "continue":
+        for logfile in os.listdir("logs"):
+            logfile = logfile[4:] # remove 'log_' at the start
+            if os.path.exists(f"reports/GapReport_{logfile}"): continue
 
-        if len(data) > 4:
-            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (too many arguments)")
-            continue
-        if len(data) < 3:
-            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (too few arguments)")
-            continue
+            with open(f"logs/log_{logfile}") as f:
+                logdata = f.read().split('\n')
+            newDeviceIdx = int(logdata[0])
+            if newDeviceIdx != deviceIdx:
+                continue # not for us to do
+            parameters = json.loads(logdata[1])
 
-        if len(data) == 4 and data[3] != deviceIdx:
-            continue # this work unit is not for us to do
-        start, end, minGap = data[:3]
-        if start >= end:
-            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be < end)")
-            continue
-        if start*10**12 < 2**64:
-            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >2^64)")
-            continue
-        if end*10**12 > 2**65:
-            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be <2^65)")
-            continue
-        if minGap % (parameters["WORD_LENGTH"]//4):
-            printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' "
-                      f"(minGap must be a multiple of {parameters['WORD_LENGTH']//4})")
-            continue
+            recompile(parameters, newDeviceIdx)
+            start, end, minGap = logfile.split("_")
+            start, end, minGap = int(start.split("e")[0]), int(end.split("e")[0]), int(minGap.split(".")[0])
 
-        msg = ""
-        if os.path.exists(getReportFileName(start, end, minGap)):
-            msg = f"| {Style.BRGREEN}This work unit has already been completed!{Style.RESET}"
+            results = [] # repopulate results
+            for line in logdata:
+                line = line.split()
+                if not line: continue
+                if line[0] == "Gap":
+                    results.append((int(line[1]), float(line[2]), int(line[3])))
+            
+            assert logdata[-2].startswith("Progress")
+            skippedBlocks = int(logdata[-2].split()[2])
+            newStart = int(logdata[-2].split()[1])
 
-        print(f"Running work unit: '{line}' {msg}")
-        startTime = dt.datetime.utcnow()
-        results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx)
-        endTime = dt.datetime.utcnow()
-        print("\nSaving to file... ", end='')
-        writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"],
-                        startTime, endTime, deviceInfo[deviceIdx]["Name"])
-        print("Done")
+            top5 = sorted([f"{r[0]:4d}" for r in results], reverse=True, key=lambda x: int(x) if x != "----" else 0)[:5]
+            print(f"Finishing work unit from log file: '{logfile}'")
+            startTime = dt.datetime.now(dt.timezone.utc)
+            results += runOne(parameters, newStart, end*10**12, minGap,
+                              newDeviceIdx, f"logs/log_{logfile}", startTime, skippedBlocks, top5)
+            endTime = dt.datetime.now(dt.timezone.utc)
+            print("\nSaving to file... ", end='')
+            writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"],
+                            startTime, endTime, deviceInfo[newDeviceIdx]["Name"])
+            print("Done")
+    
+    elif runMode == "run":
+        recompile(parameters, deviceIdx)
+        with open(WORKTODO_FILE) as f:
+            work = f.read().split('\n')
+    
+        for line in work:
+            line = line.split("#")[0].strip()
+            if not line: continue
+            try:
+                data = list(map(int, line.split(",")))
+            except ValueError:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (not a number)")
+                continue
+
+            if len(data) > 4:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (too many arguments)")
+                continue
+            if len(data) < 3:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (too few arguments)")
+                continue
+
+            if len(data) == 3: data.append(0) # we default to device index 0 if it's not specified
+            if data[3] != deviceIdx:
+                continue # this work unit is not for us to do
+
+            start, end, minGap = data[:3]
+            if start >= end:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be < end)")
+                continue
+            if start*10**12 < 2**64:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >2^64)")
+                continue
+            if end*10**12 > 2**65:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be <2^65)")
+                continue
+            if minGap % (parameters["WORD_LENGTH"]//4):
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' "
+                        f"(minGap must be a multiple of {parameters['WORD_LENGTH']//4})")
+                continue
+
+            msg = ""
+            if os.path.exists(getReportFileName(start, end, minGap)):
+                msg = f"| {Style.BRGREEN}This work unit has already been completed! Redoing...{Style.RESET}"
+            
+            logFilename = getLogFileName(start, end, minGap)
+            if not os.path.exists(os.path.dirname(logFilename)):
+                os.makedirs(os.path.dirname(logFilename))
+            if os.path.exists(logFilename) and not msg:
+                print(f"{Style.BRCYAN}Skipping partially completed work unit: '{Style.YELLOW}{line}{Style.BRCYAN}' "
+                      f"(finish using 'main.py <deviceIdx> continue'){Style.RESET}")
+                continue
+
+            print(f"Running work unit: '{line}' {msg}")
+            startTime = dt.datetime.now(dt.timezone.utc)
+            results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx, logFilename, startTime)
+            endTime = dt.datetime.now(dt.timezone.utc)
+            print("\nSaving to file... ", end='')
+            writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"],
+                            startTime, endTime, deviceInfo[deviceIdx]["Name"])
+            print("Done")
 
     print()
 
