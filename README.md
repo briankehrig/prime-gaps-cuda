@@ -6,8 +6,19 @@ A highly optimized GPU-accelerated program for finding large prime gaps.
 This code is linux-only. However, if you have Windows, it works great on WSL. However, since the code is GPU-based, you will need a GPU. Specifically, you'll need a CUDA-capable NVIDIA GPU.
 The code in this repo is designed to be easy to plug-and-go. There are only two things you have to install before you are ready to run the code: CUDA and python.
 
-To install CUDA, follow the instructions on [this page](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/#package-manager-installation), specifically section 3.
+## CUDA setup
+To install CUDA, follow the instructions [here](https://developer.nvidia.com/cuda-downloads). If you want more technical details about the installation, you can go to [this page](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/#package-manager-installation), specifically section 3.
 
+To verify that the CUDA installation worked, run `nvcc --version` in the terminal. If the terminal cannot find `nvcc` even after installing CUDA, then you can add it to the PATH by doing these steps:
+- Find the folder in your filesystem that CUDA was installed to: it usually looks something like `/usr/lib/cuda/` or `/usr/local/cuda-12.0/`.
+- Run these commands (replacing the folders in them with your actual CUDA folder):
+  1. `echo 'export PATH=/usr/lib/cuda/bin:$PATH' >> ~/.bashrc`
+  2. `echo 'export LD_LIBRARY_PATH=/usr/lib/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc`
+  3. `source ~/.bashrc​`
+
+Note: Although most varieties of Linux come with a C compiler by default, you might need to install it manually. If `gcc --version` gives an error, then you can install `gcc` manually by running `sudo apt update` followed by `sudo apt install build-essential`.
+
+## Python setup
 There are a few ways you can get a Python environment set up, but here is a simple one. Any relatively recent Python 3 version will work fine.
 - `sudo apt update` (update the package lists)
 - `sudo apt install python3` (install python 3)
@@ -71,3 +82,13 @@ The program is divided into several steps:
 # Restrictions
 - The code currently only works between 2^64 and 2^65.
 - For minGap<900, the resulting list of gaps may not be exhaustive.
+
+# Selected Benchmarks
+Note: real-world values may deviate slightly due to many factors.
+| GPU | Billion/second |
+| -------- | ------- |
+| RTX 4090 | 1750 |
+| RTX 4070 | 700 |
+| RTX 3080 | 650 |
+| Titan V | 570  |
+| GTX 1660 Mobile | 190
