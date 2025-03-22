@@ -106,7 +106,7 @@ def getDeviceInfo():
             elif represents == "float":
                 deviceInfo[-1][line[0]] = float(line[1])
             else:
-                deviceInfo[-1][line[0]] = " ".join(line[1:])
+                deviceInfo[-1][line[0]] = " ".join(line[1:]).upper()
     return deviceInfo
 
 def removeDoubleSlashComments(string):
@@ -148,8 +148,18 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
     else:
         recommended["SHARED_SIZE_WORDS"] = 12288
 
-    recommended["SMALL_PRIME_WHEELS"] = 3 if "RTX 4090" in deviceInfo["Name"] else 4
-    recommended["NUM_MEDIUM_PRIMES_BASE"] = 8192 if "Titan V" in deviceInfo["Name"] else 4096
+    if "RTX 4090" in deviceInfo["Name"] or "RTX 5080" in deviceInfo["Name"]:
+        recommended["SMALL_PRIME_WHEELS"] = 3
+    else:
+        recommended["SMALL_PRIME_WHEELS"] = 4
+        
+    if "TITAN V" in deviceInfo["Name"]:
+        recommended["NUM_MEDIUM_PRIMES_BASE"] = 8192
+    if "RTX 5080" in deviceInfo["Name"]:
+        recommended["NUM_MEDIUM_PRIMES_BASE"] = 12288
+    else:
+        recommended["NUM_MEDIUM_PRIMES_BASE"] = 4096
+
     recommended["PROPORTION_OF_BLOCKS_FOR_SIEVING"] = 0.5
 
     gpuBlocks = deviceInfo["CUDACores"]
@@ -162,6 +172,8 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
     blockSize = int((deviceInfo["GlobalMemGB"]-1.5)*2**30 * targetMemoryUsage/2) * recommended["WORD_LENGTH"]//4
     blockSize -= blockSize % (recommended["SHARED_SIZE_WORDS"] * recommended["WORD_LENGTH"] * recommended["GPU_BLOCKS"])
     recommended["BLOCK_SIZE"] = blockSize
+
+    # TODO: The above calculation needs to depend on the ACTUAL value of SHARED_SIZE_WORDS, not the recommended value!!
 
     return recommended
 

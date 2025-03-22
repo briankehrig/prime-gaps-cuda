@@ -84,11 +84,12 @@ The program is divided into several steps:
 - For minGap<900, the resulting list of gaps may not be exhaustive.
 
 # Selected Benchmarks
-Note: real-world values may deviate slightly due to many factors.
+Note: real-world values may deviate slightly due to various factors.
 | GPU | Billion/second |
 | -------- | ------- |
 | RTX 4090 | 1750 |
+| RTX 5080 | 1120 |
 | RTX 4070 | 700 |
 | RTX 3080 | 650 |
 | Titan V | 570  |
-| GTX 1660 Mobile | 190
+| GTX 1660 Mobile | 185
