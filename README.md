@@ -89,7 +89,7 @@ Note: real-world values may deviate slightly due to various factors.
 | -------- | ------- |
 | RTX 4090 | 1750 |
 | RTX 5080 | 1120 |
-| RTX 4070 | 700 |
-| RTX 3080 | 650 |
-| Titan V | 570  |
+| RTX 3080 | 670 |
+| RTX 4070 | 650 |
+| Titan V | 600  |
 | GTX 1660 Mobile | 185

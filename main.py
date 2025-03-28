@@ -148,17 +148,19 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
     else:
         recommended["SHARED_SIZE_WORDS"] = 12288
 
-    if "RTX 4090" in deviceInfo["Name"] or "RTX 5080" in deviceInfo["Name"]:
+    if any(x in deviceInfo["Name"] for x in ("RTX 4070", "RTX 4090", "RTX 5080")):
         recommended["SMALL_PRIME_WHEELS"] = 3
     else:
         recommended["SMALL_PRIME_WHEELS"] = 4
         
-    if "TITAN V" in deviceInfo["Name"]:
-        recommended["NUM_MEDIUM_PRIMES_BASE"] = 8192
-    if "RTX 5080" in deviceInfo["Name"]:
+    if "GTX 1660" in deviceInfo["Name"]:
+        recommended["NUM_MEDIUM_PRIMES_BASE"] = 4096
+    elif any(x in deviceInfo["Name"] for x in ("RTX 3080", "RTX 4070")):
+        recommended["NUM_MEDIUM_PRIMES_BASE"] = 10240
+    elif "RTX 5080" in deviceInfo["Name"]:
         recommended["NUM_MEDIUM_PRIMES_BASE"] = 12288
     else:
-        recommended["NUM_MEDIUM_PRIMES_BASE"] = 4096
+        recommended["NUM_MEDIUM_PRIMES_BASE"] = 8192
 
     recommended["PROPORTION_OF_BLOCKS_FOR_SIEVING"] = 0.5
 
@@ -174,6 +176,10 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
     recommended["BLOCK_SIZE"] = blockSize
 
     # TODO: The above calculation needs to depend on the ACTUAL value of SHARED_SIZE_WORDS, not the recommended value!!
+    '''
+    4070: 3 small wheels is better, 10240 medium, speed 640B/s
+    '''
+
 
     return recommended
 
@@ -433,9 +439,13 @@ def main():
                 if line[0] == "Gap":
                     results.append((int(line[1]), float(line[2]), int(line[3])))
             
-            assert logdata[-2].startswith("Progress")
-            skippedBlocks = int(logdata[-2].split()[2])
-            newStart = int(logdata[-2].split()[1])
+            if logdata[-2].startswith("Progress"):
+                skippedBlocks = int(logdata[-2].split()[2])
+                newStart = int(logdata[-2].split()[1])
+            else:
+                # the log file doesn't have any Progress lines at all
+                skippedBlocks = 0
+                newStart = start*10**12
 
             top5 = sorted([f"{r[0]:4d}" for r in results], reverse=True, key=lambda x: int(x) if x != "----" else 0)[:5]
             top5 += ["----"] * (5-len(top5))
@@ -490,10 +500,12 @@ def main():
                 continue
 
             msg = ""
-            if os.path.exists(getReportFileName(start, end, minGap)):
-                msg = f"| {Style.BRGREEN}This work unit has already been completed! Redoing...{Style.RESET}"
-            
             logFilename = getLogFileName(start, end, minGap)
+            if os.path.exists(getReportFileName(start, end, minGap)):
+                print(f"{Style.BRCYAN}Skipping fully completed work unit: '{Style.YELLOW}{line}{Style.BRCYAN}' "
+                      f"(remove the report file if you'd like to redo it){Style.RESET}")
+                continue
+            
             if not os.path.exists(os.path.dirname(logFilename)):
                 os.makedirs(os.path.dirname(logFilename))
             if os.path.exists(logFilename) and not msg:
