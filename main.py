@@ -230,7 +230,7 @@ def formatETA(seconds):
     x //= 60
     m = x % 60 # minutes
     x //= 60
-    h = x % 60 # hours
+    h = x % 24 # hours
     x //= 24
     d = x # days
     if d>9999: return f">9999d"
