@@ -497,8 +497,8 @@ def main():
             if start*10**12 < 2**64:
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >2^64)")
                 continue
-            if end*10**12 > 2**72:
-                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be >2^72)")
+            if end*10**12 > 2**69:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be >2^69)")
                 continue
             if minGap % (parameters["WORD_LENGTH"]//4):
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' "
