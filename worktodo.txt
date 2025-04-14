@@ -20,4 +20,5 @@
 # It requires WORD_LENGTH to be set to 120 to work properly, due to the fact that 690 is quite small.
 # Notice that the aforementioned gap starting at 18447233112263859833 does appear in the output.
 
-20733746,20733747,1200
+20733746,20733747,1260
+100000000,100000010,1260

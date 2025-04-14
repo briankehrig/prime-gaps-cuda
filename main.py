@@ -390,14 +390,20 @@ def main():
         runMode = 'run'
     elif len(sys.argv) > 3:
         print("Usage: 'python3 prime_gaps.py [deviceIdx] [mode]'")
-        print("'mode' can be one of ('run', 'continue'). Defaults to 'run'.")
+        print("'mode' can be one of ('run', 'forcerun', 'continue'). Defaults to 'run'.")
         return
     else:
         deviceIdx = int(sys.argv[1])
         runMode = 'run' if len(sys.argv) <= 2 else sys.argv[2]
-        if runMode not in ("run", "continue"):
-            print(f"Unknown mode {runMode} is not one of ('run', 'continue')")
+        if runMode not in ("run", "forcerun", "continue"):
+            print(f"Unknown mode {runMode} is not one of ('run', 'forcerun', 'continue')")
             return
+    
+    if runMode == "forcerun":
+        print(f"{Style.YELLOW}Forcerun will overwrite the log file"
+              f" and gap report file of any previous overlapping runs.")
+        result = input(f"Are you sure you wish to continue? (input 'y') {Style.RESET}")
+        if result.lower() != "y": return
     
     deviceInfo = getDeviceInfo()
     if deviceIdx >= len(deviceInfo):
@@ -459,7 +465,7 @@ def main():
                             startTime, endTime, deviceInfo[newDeviceIdx]["Name"])
             print("Done")
     
-    elif runMode == "run":
+    elif runMode in ("run", "forcerun"):
         recompile(parameters, deviceIdx)
         with open(WORKTODO_FILE) as f:
             work = f.read().split('\n')
@@ -491,6 +497,9 @@ def main():
             if start*10**12 < 2**64:
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >2^64)")
                 continue
+            if end*10**12 > 2**72:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be >2^72)")
+                continue
             if minGap % (parameters["WORD_LENGTH"]//4):
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' "
                         f"(minGap must be a multiple of {parameters['WORD_LENGTH']//4})")
@@ -499,16 +508,25 @@ def main():
             msg = ""
             logFilename = getLogFileName(start, end, minGap)
             if os.path.exists(getReportFileName(start, end, minGap)):
-                print(f"{Style.BRCYAN}Skipping fully completed work unit: '{Style.YELLOW}{line}{Style.BRCYAN}' "
-                      f"(remove the report file if you'd like to redo it){Style.RESET}")
-                continue
+                if runMode == "forcerun":
+                    msg = f"{Style.BRCYAN}This work unit was fully completed, rerunning it{Style.RESET}"
+                else:
+                    print(f"{Style.BRCYAN}Skipping fully completed work unit: '{Style.YELLOW}{line}{Style.BRCYAN}' "
+                        f"(redo it using 'main.py <deviceIdx> forcerun){Style.RESET}")
+                    continue
             
             if not os.path.exists(os.path.dirname(logFilename)):
                 os.makedirs(os.path.dirname(logFilename))
-            if os.path.exists(logFilename) and not msg:
-                print(f"{Style.BRCYAN}Skipping partially completed work unit: '{Style.YELLOW}{line}{Style.BRCYAN}' "
-                      f"(finish using 'main.py <deviceIdx> continue'){Style.RESET}")
-                continue
+            if os.path.exists(logFilename) and runMode == "forcerun":
+                os.remove(logFilename)
+            
+            if os.path.exists(logFilename):
+                if runMode == "forcerun" and not msg:
+                    msg = f"{Style.BRCYAN}This work unit was partially completed, restarting it{Style.RESET}"
+                else:
+                    print(f"{Style.BRCYAN}Skipping partially completed work unit: '{Style.YELLOW}{line}{Style.BRCYAN}' "
+                        f"(finish using 'main.py <deviceIdx> continue'){Style.RESET}")
+                    continue
 
             print(f"Running work unit: '{line}' {msg}")
             startTime = dt.datetime.now(dt.timezone.utc)
