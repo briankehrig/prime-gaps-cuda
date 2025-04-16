@@ -319,7 +319,6 @@ __host__ __device__ void my_getMagic(uint64_t mod_lo, uint64_t mod_hi, uint64_t 
 	t /= s;
 	t >>= bit;
 	*magic1 = (uint64_t) t;
-    printf("magic1=%lu\n", *magic1);
 #if 0
 	// slow
 	// precomputes 2^96 % mod
@@ -355,9 +354,6 @@ __host__ __device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64
 {
 	uint64_t n_lo = (uint64_t) n;
 	uint64_t n_hi = (uint64_t) (n >> 64);	// let assume n_hi is less than 12 bits
-    if (n_lo == 9245440814321806126) {
-        printf("TESTIN\n");
-    }
 
 #if PARANOID
 	assert(n_hi <= 0xfff);	// less than 12 bits, input number less than 76 bits
@@ -415,20 +411,17 @@ __host__ __device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64
 	assert((lo >> 64) == 0);
 #endif
 	uint128_t res = (mid << 64) + lo;	// res is less than (64 + 64) (64) -> 128 bits
-    printf("  res1=%lu%019lu\n", hi19(res), lo19(res));
 
 	// barrett approximate reduction, less than 4 extra bits left
 	// magic1 is 64 bits, mid is 64 bits
 	uint128_t e = (uint128_t) magic1 * (uint64_t) mid;	// e is less than  (64 + 64) = 128 bits
-    printf("  e=%lu:::%lu\n", (uint64_t) (e>>64), (uint64_t) e);
 	uint64_t e_hi = (uint64_t) (e >> 64);	// e_hi is less than 64 bits
 	res -= ((uint128_t) mod_lo * e_hi);
     
-    if (n_lo == 9245440814321806126) printf("  res2=%lu%019lu\n", hi19(res), lo19(res));
 	res -= ((uint128_t) mod_hi * e_hi) << 64;
     
-    if (n_lo == 9245440814321806126) printf("  res3=%lu%019lu\n", hi19(res), lo19(res));
     if (res >> 127) { // overshot it somehow, magic1 was 1 too high?
+        // THIS ONE FIX CAUSES A 7% PERFORMANCE LOSS???
         res += (((uint128_t) mod_hi) << 64) + mod_lo;
     }
 #if PARANOID2
@@ -483,7 +476,6 @@ __host__ __device__ bool my_fermatTest660(uint64_t n_lo, uint64_t n_hi)
 #endif
 
 	if (bit == 0) {
-        printf("  1a result64=%lu\n", result64);
 		bit = 64;
 		while (bit && result64 <= 38967) {
 			bit -= 1;
@@ -496,7 +488,6 @@ __host__ __device__ bool my_fermatTest660(uint64_t n_lo, uint64_t n_hi)
 		result = result64;
 
 	} else {
-        printf("  1b result64=%lu\n", result64);
 		result = result64;
 		while (bit) {
 			bit -= 1;
@@ -506,7 +497,6 @@ __host__ __device__ bool my_fermatTest660(uint64_t n_lo, uint64_t n_hi)
 #endif
 			result = my_fastModSqr(result, n_lo, n_hi, magic1, magic2_lo, magic2_hi);
 			result <<= ((n_hi >> bit) & 1);
-            printf("    1b result=%lu%019lu\n", hi19(result), lo19(result));
 		}
 		bit = 64;
 	}
@@ -520,24 +510,18 @@ __host__ __device__ bool my_fermatTest660(uint64_t n_lo, uint64_t n_hi)
 		// advance 1 bits at a time
 		bit -= 1;
 		// square and reduce
-#if 0
+#if PARANOID
 		// input constraint
 		assert((result >> 64) <= 0xfff);
 #endif
 		result = my_fastModSqr(result, n_lo, n_hi, magic1, magic2_lo, magic2_hi);
-#if 0
-        if (result >= 3 * n) {
-            printf("LADSFFHASDKHFADSASKHDFKAHSD %lu\n", n_lo);
-        }
+#if PARANOID
 		assert(result < 3 * n); // THIS ASSERTION FAILED!!!!!!!!! THREAD 65
 #endif
 		// and let the number overflow a little bit
 		// - result is less than 6m   (quite over-rounded)
-        if (bit<3) printf("  bit=%d 2a result=%lu%019lu\n", bit, hi19(result), lo19(result));
 		result <<= ((n_lo >> bit) & 1);
-        if (bit<3) printf("  bit=%d 2b result=%lu%019lu\n", bit, hi19(result), lo19(result));
 	}
-    printf("Progress 3\n");
 
 	// - last round with 1 bit to process
 	// - Euler's criterion 2^(n>>1) == legendre_symbol(2,n) (https://en.wikipedia.org/wiki/Euler%27s_criterion)
@@ -553,12 +537,9 @@ __host__ __device__ bool my_fermatTest660(uint64_t n_lo, uint64_t n_hi)
 	//   therefore, there are many extra bits to shave. worst case is 7 bits.
 	// - use repeated subtractions within a log2 algorithm
 	uint128_t t = n;
-    printf("n=t=%lu%019lu result=%lu%019lu\n", hi19(t), lo19(t), hi19(result), lo19(result));
 	while (t < result) {
 		t *= 2;
-        //if (t) printf("result=%lu%019lu t=%lu%019lu\n", hi19(result+1), lo19(result+1), hi19(t), lo19(t));
     }
-    printf("Progress 3.5\n");
 	while (t >= n) {
 		if (result >= t) {
 			result -= t;
@@ -1544,17 +1525,17 @@ int main(int argc, char* argv[]) {
     setbuf(stdout, NULL);
 
     
-    printf("Before\n");
-    int t;
+    //printf("Before\n");
+    //int t;
     //t = (int) my_fermatTest660(3106524393915331887UL, 2); // previous prime
     //t = (int) my_fermatTest660(3106524393915332011UL, 2); // previous ints
     //t = (int) my_fermatTest660(3106524393915332013UL, 2); // previous ints
     //t = (int) my_fermatTest660(3106524393915332015UL, 2); // previous ints
     //t = (int) my_fermatTest660(3106524393915332017UL, 2); // previous ints
-    t = (int) my_fermatTest660(3106524393915332019UL, 2); // previous ints
-    t = (int) my_fermatTest660(3106524393915332021UL, 2); // bad
-    printf("After %d\n", t);
-    return 0;
+    //t = (int) my_fermatTest660(3106524393915332019UL, 2); // previous ints
+    //t = (int) my_fermatTest660(3106524393915332021UL, 2); // bad
+    //printf("After %d\n", t);
+    //return 0;
     
 
     if (argc < 4 || argc > 5) {
