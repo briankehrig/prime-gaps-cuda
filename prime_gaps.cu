@@ -245,62 +245,6 @@ __device__ void printBigNum(uint128_t num) {
     printf("%lu%019lu\n", hi19(num), lo19(num));
 }
 
-__device__ inline uint64_t getMagic(uint128_t mod) {
-    // !! THIS ONLY WORKS IF mod > 2^64, otherwise we would get overflow!
-    return (uint64_t) ((((uint128_t) 0) - 1) / mod);
-}
-
-__device__ inline uint64_t mul_128_64_hi64_inexact(uint128_t a128, uint64_t b64) {
-    // Gets the highest 64 bits of a product of 128-bit and 64-bit integers
-    // We are ignoring the lower 64 bits of a128, since that will affect the result by at most 1.
-    // We will deal with the +1 later.
-    return (uint64_t) (((a128 >> 64) * b64) >> 64);
-}
-
-__device__ inline uint128_t fastMod(uint128_t n, uint128_t mod, uint64_t magic) {
-    // !!! THIS ONLY WORKS IF mod > 2^64
-    // (this is because "magic" needs to fit in a 64-bit int for efficiency)
-    uint128_t result = n - mod * mul_128_64_hi64_inexact(n, magic);
-
-    // potential +1 from losing the carry in the mul128*64, and another +1 from the inexactness of the magic num
-
-    return result - ((result >= mod) + (result >= mod*2)) * mod;
-}
-
-__device__ inline uint128_t superfastMod(uint128_t n, uint128_t mod, uint64_t magic) {
-    // same as fastMod but it might give a result up to 2*mod higher (still correct modulo "mod")
-    return n - mod * mul_128_64_hi64_inexact(n, magic);
-}
-
-__device__ inline uint128_t squareMod84(uint128_t a, uint128_t mod, uint128_t magic) {
-    uint128_t ahi = a>>42;
-	uint128_t alo = a & 0x3ffffffffffL;
-	//return ((((a*ahi) % m) << 42) + a*alo) % m
-    return fastMod((fastMod(a*ahi, mod, magic) << 42) + a*alo, mod, magic);
-}
-
-__device__ bool fermatTest84(uint128_t n) {
-    // n must be < 2^64.5 ~ 26087635650665564424 = 2.6087e19
-    uint128_t result = 1;
-    //uint128_t mod128 = ((uint128_t) -1) % n + 1;
-    uint64_t magic = getMagic(n);
-    for (int bit=84; bit>=1; bit--) {
-        if ((n >> bit) & 1) {
-            result *= 2;
-            result -= n * (result >= n); // using an if statement here miiiiight be faster?
-        }
-        result = squareMod84(result, n, magic);
-    }
-    return result == 1;
-}
-
-__device__ bool fermatTest84(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
-    return fermatTest84(n);
-}
-
-
-
-
 
 
 
@@ -308,7 +252,8 @@ __device__ bool fermatTest84(uint128_t n, uint32_t delta, uint64_t orig_magic, d
 //       vvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 
 // (a::b) <<= c
-__host__ __device__ inline void my_shld64(uint64_t * a, uint64_t * b, uint64_t c)
+__host__ __device__ static inline __attribute__((always_inline))
+void my_shld64(uint64_t * a, uint64_t * b, uint64_t c)
 {
 #if PARANOID
 	assert(c < 64);
@@ -321,14 +266,9 @@ __host__ __device__ inline void my_shld64(uint64_t * a, uint64_t * b, uint64_t c
 }
 
 // borrow::diff = a - b - borrow_in
-__host__ __device__ inline uint8_t my_sbb64(uint8_t borrow_in, uint64_t a, uint64_t b, uint64_t * diff)
+static inline __attribute__((always_inline))
+__host__ __device__ uint8_t my_sbb64(uint8_t borrow_in, uint64_t a, uint64_t b, uint64_t * diff)
 {
-//#ifndef __CUDA_ARCH__
-//	bool c;
-//	c = __builtin_usubll_overflow(a, b, (unsigned long long *)diff);
-//	c |= __builtin_usubll_overflow(*diff, borrow_in, (unsigned long long *)diff);
-//	return c;
-//#else
     uint64_t tmp1 = a - borrow_in;
     uint8_t borrow = (tmp1 > a);
 
@@ -336,18 +276,14 @@ __host__ __device__ inline uint8_t my_sbb64(uint8_t borrow_in, uint64_t a, uint6
     borrow |= (tmp2 > tmp1);
     *diff = tmp2;
     return borrow;
-//#endif
 }
 
 // count leading zeroes in binary representation
-__host__ __device__ inline uint64_t my_clz64(uint64_t n)
+static inline __attribute__((always_inline))
+__host__ __device__ uint64_t my_clz64(uint64_t n)
 {
 #ifdef __CUDA_ARCH__
     return __clzll(n);
-#elif defined(__GNUC__)
-	if (n)
-		return __builtin_clzll(n);
-	return 64;
 #else
 	if (n == 0)
 		return 64;
@@ -368,7 +304,8 @@ __host__ __device__ inline uint64_t my_clz64(uint64_t n)
 #endif
 }
 
-__host__ __device__ static inline uint64_t montgomeryInverse64(uint64_t mod_lo)
+static inline __attribute__((always_inline))
+__host__ __device__ uint64_t montgomeryInverse64(uint64_t mod_lo)
 {
 	uint64_t x = (3ull * mod_lo) ^ 2ull;	// 5 bits acurate
 	uint64_t t = 1ull - mod_lo * x;
@@ -383,7 +320,8 @@ __host__ __device__ static inline uint64_t montgomeryInverse64(uint64_t mod_lo)
 }
 
 // subtract the modulus 'mod' multiple times from the input number 'res', if needed
-__host__ __device__ static inline void ciosSubtract128(uint64_t * res_lo, uint64_t * res_hi, uint64_t mod_lo, uint64_t mod_hi)
+static inline __attribute__((always_inline))
+__host__ __device__ void ciosSubtract128(uint64_t * res_lo, uint64_t * res_hi, uint64_t mod_lo, uint64_t mod_hi)
 {
 	uint64_t n_lo, n_hi;
 	uint64_t t_lo, t_hi;
@@ -403,7 +341,8 @@ __host__ __device__ static inline void ciosSubtract128(uint64_t * res_lo, uint64
 	*res_hi = t_hi;
 }
 
-__host__ __device__ static void ciosConstants128(uint64_t mod_lo, uint64_t mod_hi, uint64_t * magic_lo, uint64_t * magic_hi)
+static inline __attribute__((always_inline))
+__host__ __device__ void ciosConstants128(uint64_t mod_lo, uint64_t mod_hi, uint64_t * magic_lo, uint64_t * magic_hi)
 {
 	// computes 2^128 % mod
 	uint128_t m = ((uint128_t) mod_hi << 64) + mod_lo;
@@ -416,12 +355,12 @@ __host__ __device__ static void ciosConstants128(uint64_t mod_lo, uint64_t mod_h
 #endif
 }
 
-
+static inline __attribute__((always_inline))
 __host__ __device__ void ciosModSquare128(uint64_t * res_lo, uint64_t * res_hi, uint64_t mod_lo, uint64_t mod_hi, uint64_t mmagic)
 {
 	uint64_t n_lo = *res_lo, n_hi = *res_hi;
 	uint128_t cs, cc;
-	uint64_t t0, t1, t2, m, ignore;
+	uint64_t t0, t1, t2, m;
 
 	cc = (uint128_t) n_lo *n_lo;	// #1
 	t0 = (uint64_t) cc;
@@ -438,20 +377,10 @@ __host__ __device__ void ciosModSquare128(uint64_t * res_lo, uint64_t * res_hi, 
 	cs = (uint128_t) m *mod_lo;	// #4
 	cs += t0;
 	cs = cs >> 64;
-	/* if (__builtin_constant_p(mod_hi) && mod_hi == 0) {
-	} else if (__builtin_constant_p(mod_hi) && mod_hi == 1) {
-		cs += m;	//#3, removed at compile time
-	} else if (__builtin_constant_p(mod_hi) && mod_hi == 2) {
-		cs += m;	//#3, removed at compile time
-		cs += m;	//#3, removed at compile time
-	} else if (__builtin_constant_p(mod_hi) && mod_hi == 3) {
-		cs += m;	//#3, removed at compile time
-		cs += m;	//#3, removed at compile time
-		cs += m;	//#3, removed at compile time
-	} else {
-		cs += (uint128_t) m *mod_hi;	//#3, removed at compile time
-	} */
+
+    cs += (uint128_t) m *mod_hi; // CAN OPTIMIZE
 	cs += t1;
+    
 	t0 = (uint64_t) cs;
 	cs = cs >> 64;
 	cs += t2;
@@ -482,20 +411,8 @@ __host__ __device__ void ciosModSquare128(uint64_t * res_lo, uint64_t * res_hi, 
 	cs = (uint128_t) m *mod_lo;	// #8
 	cs += t0;
 	cs = cs >> 64;
-    /* if (__builtin_constant_p(mod_hi) && mod_hi == 0) {
-	} else if (__builtin_constant_p(mod_hi) && mod_hi == 1) {
-		cs += m;	//#3, removed at compile time
-	} else if (__builtin_constant_p(mod_hi) && mod_hi == 2) {
-		cs += m;	//#3, removed at compile time
-		cs += m;	//#3, removed at compile time
-	} else if (__builtin_constant_p(mod_hi) && mod_hi == 3) {
-		cs += m;	//#3, removed at compile time
-		cs += m;	//#3, removed at compile time
-		cs += m;	//#3, removed at compile time
-	} else {
-		cs += (uint128_t) m *mod_hi;	//#3, removed at compile time
-	} */
-    cs += (uint128_t) m *mod_hi;
+    
+    cs += (uint128_t) m *mod_hi; // CAN OPTIMIZE
     
 
 	cs += t1;
@@ -527,11 +444,15 @@ __host__ __device__ inline void ciosModSquare3_128(uint64_t * res_lo, uint64_t *
 	ciosModSquare128(res_lo, res_hi, mod_lo, mod_hi, mmagic);
 }
 
-__host__ __device__ bool ciosFermatTest128(uint64_t n_lo, uint64_t n_hi)
-{
+#ifdef HIGH_64
+__host__ __device__ bool ciosFermatTest128(uint64_t n_lo) {
+#else
+__host__ __device__ bool ciosFermatTest128(uint64_t n_lo, uint64_t HIGH_64) {
+#endif
 #if PARANOID
 	assert((n_lo & 1) == 1);
 #endif
+    //const uint64_t n_hi = <stuff here>;
 
 	uint64_t res_lo, res_hi;
 	uint64_t one_lo, one_hi;
@@ -541,55 +462,47 @@ __host__ __device__ bool ciosFermatTest128(uint64_t n_lo, uint64_t n_hi)
 
 	// enter montgomery domain
 	// constant 2^128 mod m
-	ciosConstants128(n_lo, n_hi, &one_lo, &one_hi);
+	ciosConstants128(n_lo, HIGH_64, &one_lo, &one_hi);
 	res_hi = one_hi;
 	res_lo = one_lo;
 
-	/* if (__builtin_constant_p(n_hi) && n_hi == 0) {
-		bit = 64 - my_clz64(n_lo);
-		uint64_t msb_bits = bit < 5 ? bit - 1 : 3;
-		uint64_t msb_mask = (1 << msb_bits) - 1;
-		bit -= msb_bits;
-		my_shld64(&res_hi, &res_lo, (n_lo >> bit) & msb_mask);
+    if (HIGH_64 == 0) {
+        bit = 64 - my_clz64(n_lo);
+        uint64_t msb_bits = bit < 5 ? bit - 1 : 3;
+        uint64_t msb_mask = (1 << msb_bits) - 1;
+        bit -= msb_bits;
+        my_shld64(&res_hi, &res_lo, (n_lo >> bit) & msb_mask);
 
-	} else { */
-		if (n_hi == 0) {
-			bit = 64 - my_clz64(n_lo);
-			uint64_t msb_bits = bit < 5 ? bit - 1 : 3;
-			uint64_t msb_mask = (1 << msb_bits) - 1;
-			bit -= msb_bits;
-			my_shld64(&res_hi, &res_lo, (n_lo >> bit) & msb_mask);
+    } else {
+        bit = 64 - my_clz64(HIGH_64);
+        uint64_t msb_bits = bit < 4 ? bit : 3;
+        uint64_t msb_mask = (1 << msb_bits) - 1;
+        bit -= msb_bits;
+        my_shld64(&res_hi, &res_lo, (HIGH_64 >> bit) & msb_mask);
 
-		} else {
-			bit = 64 - my_clz64(n_hi);
-			uint64_t msb_bits = bit < 4 ? bit : 3;
-			uint64_t msb_mask = (1 << msb_bits) - 1;
-			bit -= msb_bits;
-			my_shld64(&res_hi, &res_lo, (n_hi >> bit) & msb_mask);
+        while (bit >= 3) {
+            bit -= 3;
+            // square and reduce
+            ciosModSquare3_128(&res_lo, &res_hi, n_lo, HIGH_64, mmagic);
+            // shift
+            my_shld64(&res_hi, &res_lo, ((HIGH_64 >> bit) & 7));
+        }
 
-			while (bit >= 3) {
-				bit -= 3;
-				// square and reduce
-				ciosModSquare3_128(&res_lo, &res_hi, n_lo, n_hi, mmagic);
-				// shift
-				my_shld64(&res_hi, &res_lo, ((n_hi >> bit) & 7));
-			}
+        while (bit) {
+            bit -= 1;
+            // square and reduce
+            ciosModSquare128(&res_lo, &res_hi, n_lo, HIGH_64, mmagic);
+            // shift
+            my_shld64(&res_hi, &res_lo, ((HIGH_64 >> bit) & 1));
+        }
 
-			while (bit) {
-				bit -= 1;
-				// square and reduce
-				ciosModSquare128(&res_lo, &res_hi, n_lo, n_hi, mmagic);
-				// shift
-				my_shld64(&res_hi, &res_lo, ((n_hi >> bit) & 1));
-			}
-
-			bit = 64;
-		}
+        bit = 64;
+    }
 	//}
 	while (bit >= 5) {
 		bit -= 3;
 		// square and reduce
-		ciosModSquare3_128(&res_lo, &res_hi, n_lo, n_hi, mmagic);
+		ciosModSquare3_128(&res_lo, &res_hi, n_lo, HIGH_64, mmagic);
 		// shift
 		my_shld64(&res_hi, &res_lo, ((n_lo >> bit) & 7));
 	}
@@ -597,35 +510,22 @@ __host__ __device__ bool ciosFermatTest128(uint64_t n_lo, uint64_t n_hi)
 	while (bit > 1) {
 		bit -= 1;
 		// square and reduce
-		ciosModSquare128(&res_lo, &res_hi, n_lo, n_hi, mmagic);
+		ciosModSquare128(&res_lo, &res_hi, n_lo, HIGH_64, mmagic);
 		// shift
 		my_shld64(&res_hi, &res_lo, ((n_lo >> bit) & 1));
 	}
 
 	// make sure result is strictly less than the modulus
-	ciosSubtract128(&res_lo, &res_hi, n_lo, n_hi);
+	ciosSubtract128(&res_lo, &res_hi, n_lo, HIGH_64);
 
-	// - Euler's criterion 2^(n>>1) == legendre_symbol(2,n) (https://en.wikipedia.org/wiki/Euler%27s_criterion)
-	// - Fermat primality check:
-	//   (2^(n-1) == 1) mod n
-	//
-	// - Euler primality check:
-	//   (2^(n>>1) == 1) mod n
-	//   (2^(n>>1) == n-1) mod n
 	uint64_t legendre = ((n_lo >> 1) ^ (n_lo >> 2)) & 1;	// shortcut calculation of legendre symbol
-	// when bit 1 and bit 2 are different, then n = 3 or 5 mod 8 and legendre(2,n) is -1, l = 1
-	// when bit 1 and bit 2 are same, then n = 1 or 7 mod 8 and legendre(2,n) is 1, l = 0
-	//
-	// compute (m-1) * 2^128 % mod = modulus - one
+
 	uint64_t m1_lo;
 	uint64_t m1_hi;
 	uint8_t c;
 	c = my_sbb64(0, n_lo, one_lo, &m1_lo);
-	my_sbb64(c, n_hi, one_hi, &m1_hi);
-	// check pseudo-primality
-	//   return false : n is composite for sure
-	//   return true : n is maybe prime, more tests are needed (like Lucas test)
-	//
+	my_sbb64(c, HIGH_64, one_hi, &m1_hi);
+
 	return ((res_lo == (legendre ? m1_lo : one_lo)) && (res_hi == (legendre ? m1_hi : one_hi)));
 }
 
@@ -640,27 +540,34 @@ __host__ __device__ bool ciosFermatTest128(uint64_t n_lo, uint64_t n_hi)
 
 // POTENTIAL OPTIMIZATION: REUSE MAGIC CALCULATIONS FOR MULTIPLE FERMAT TESTS
 
+
+/*
 __host__ __device__ bool fermatTest65(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
     // estimate of magic1(n) is:  magicp - 2^128*d//p^2
     // orig_magic should be precomputed as get_magic1(start)
     // orig_derivative should be 2^128 / start^2
     uint64_t magic = orig_magic - (uint64_t) (orig_derivative*delta); // this might be 1 more or 1 less than correct
     uint128_t test = ((uint128_t) (magic+2)) * n;
-    /*if (test >= n+n+n) {
-        printf("BAD FERMAT TEST: n=%lu%019lu, delta=%u orig_magic=%lu orig_derivative=%f magic=%lu test=%lu%019lu\n",
-            hi19(n), lo19(n), delta, orig_magic, orig_derivative, magic, hi19(test), lo19(test));
-        assert(false);
-    }*/
+    if (test >= n+n+n) {
+        //printf("BAD FERMAT TEST: n=%lu%019lu, delta=%u orig_magic=%lu orig_derivative=%f magic=%lu test=%lu%019lu\n",
+        //    hi19(n), lo19(n), delta, orig_magic, orig_derivative, magic, hi19(test), lo19(test));
+        //assert(false);
+    }
     if (test >= n+n) magic--;// TODO: CAN WE JUST GET RID OF THESE?
     if (test < n) magic++;
     // where d = n-p, aand 2^128/p^2 is precalculated as a double
     return ciosFermatTest128(n, magic);
 }
+*/
 
 __host__ __device__ bool fermatTestPerig(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
     // all arguments other than n are unused - we just keep it the same format as fermatTest65
     //uint64_t magic1 = my_getMagic1(n);
+#ifdef HIGH_64
+    return ciosFermatTest128((uint64_t) n);
+#else
     return ciosFermatTest128((uint64_t) n, (uint64_t) (n>>64));
+#endif
 }
 
 
@@ -782,7 +689,7 @@ __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
         bitIdx = (threadIdx.x % 2)*4;
         numBits = 4;
         pIdx = (threadIdx.x-128)/2 + 8+16;
-    } else { // the remaining 320 threads each handle 1 prime by themselves
+    } else { // the remaining threads each handle 1 prime by themselves
         bitIdx = 0;
         numBits = 8;
         pIdx = threadIdx.x-SIEVING_DUPLICATED_PRIMES;
@@ -1472,8 +1379,11 @@ void printGap(uint128_t startPrime, uint128_t endPrime) {
             }
         }
     }
-
-    printf(": %lu%019lu %u %.6f%s\n", hi19(startPrime), lo19(startPrime), gap, gap/log(startPrime), suffix.c_str());
+    if (startPrime >> 64) {
+        printf(": %lu%019lu %u %.6f%s\n", hi19(startPrime), lo19(startPrime), gap, gap/log(startPrime), suffix.c_str());  
+    } else {
+        printf(": %lu %u %.6f%s\n", (uint64_t) startPrime, gap, gap/log(startPrime), suffix.c_str());
+    }
 }
 
 void cpuFindGapAround(uint128_t n, uint32_t minGap) {
@@ -1575,33 +1485,18 @@ std::chrono::_V2::system_clock::time_point printProgress(
     exit(1);
 }*/
 
-void tests2() {
-    uint128_t s = 0x2000000200000200UL; //2^61
-    s *= 16; //2^65
-    int primes = 0;
-    printf("Doing\n");
-    for (uint128_t p=s+1; p<s+1000000; p+=2) {
-        //printf("asdf prime %lu", (uint64_t) (p%10000000000000000000UL));
-        if (FERMAT_TEST(p, 0, 0, 0)) {
-            //printf("Found prime %lu", (uint64_t) (p%10000000000000000000UL));
-            primes += 1;
-        }
-    }
-    printf("%d\n", primes);
-}
-
 
 
 int main(int argc, char* argv[]) {
     setbuf(stdout, NULL);
 
-    for (long lo=3106524393915332021; lo<3106524393915333021; lo+=2) {
+    /*for (long lo=3106524393915332021; lo<3106524393915333021; lo+=2) {
         bool result = ciosFermatTest128(lo, 2);
         if (result) {
             printf("Prime at lo=%lu\n", lo);
         }
     }
-    return 0;
+    return 0;*/
 
     if (argc < 4 || argc > 5) {
         printf("Usage: ./prime_gaps.out <minGap> <start> [numBlocks] [deviceNum]\n");
@@ -1700,7 +1595,7 @@ int main(int argc, char* argv[]) {
     
     auto start1 = std::chrono::high_resolution_clock::now();
     makeSmallPrimeWheels<<<96,512>>>(smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4);
-    cudaDeviceSynchronize();
+    HANDLE_ERROR(cudaDeviceSynchronize());
     auto finish1 = std::chrono::high_resolution_clock::now();
     std::cout << "Done in " << std::chrono::duration_cast<std::chrono::nanoseconds>(finish1-start1).count()/1e9 << " seconds\n";
    
@@ -1737,6 +1632,11 @@ int main(int argc, char* argv[]) {
 #else
     int blocksToTest = atoi(argv[3]);
     uint32_t minGapSize = atoi(argv[1]);
+#endif
+
+#ifdef HIGH_64
+    assert(sieveStart >> 64 == HIGH_64);
+    assert((sieveStart + BLOCK_SIZE*blocksToTest) >> 64 == HIGH_64);
 #endif
 
 #if (WORD_LENGTH == 120) || (WORD_LENGTH == 240)
