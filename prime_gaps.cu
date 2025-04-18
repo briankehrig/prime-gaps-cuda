@@ -245,316 +245,294 @@ __device__ void printBigNum(uint128_t num) {
     printf("%lu%019lu\n", hi19(num), lo19(num));
 }
 
-__device__ inline uint64_t getMagic(uint128_t mod) {
-    // !! THIS ONLY WORKS IF mod > 2^64, otherwise we would get overflow!
-    return (uint64_t) ((((uint128_t) 0) - 1) / mod);
-}
 
-__device__ inline uint64_t mul_128_64_hi64_inexact(uint128_t a128, uint64_t b64) {
-    // Gets the highest 64 bits of a product of 128-bit and 64-bit integers
-    // We are ignoring the lower 64 bits of a128, since that will affect the result by at most 1.
-    // We will deal with the +1 later.
-    return (uint64_t) (((a128 >> 64) * b64) >> 64);
-}
 
-__device__ inline uint128_t fastMod(uint128_t n, uint128_t mod, uint64_t magic) {
-    // !!! THIS ONLY WORKS IF mod > 2^64
-    // (this is because "magic" needs to fit in a 64-bit int for efficiency)
-    uint128_t result = n - mod * mul_128_64_hi64_inexact(n, magic);
-
-    // potential +1 from losing the carry in the mul128*64, and another +1 from the inexactness of the magic num
-
-    return result - ((result >= mod) + (result >= mod*2)) * mod;
-}
-
-__device__ inline uint128_t superfastMod(uint128_t n, uint128_t mod, uint64_t magic) {
-    // same as fastMod but it might give a result up to 2*mod higher (still correct modulo "mod")
-    return n - mod * mul_128_64_hi64_inexact(n, magic);
-}
-
-__device__ inline uint128_t squareMod84(uint128_t a, uint128_t mod, uint128_t magic) {
-    uint128_t ahi = a>>42;
-	uint128_t alo = a & 0x3ffffffffffL;
-	//return ((((a*ahi) % m) << 42) + a*alo) % m
-    return fastMod((fastMod(a*ahi, mod, magic) << 42) + a*alo, mod, magic);
-}
-
-__device__ bool fermatTest84(uint128_t n) {
-    // n must be < 2^64.5 ~ 26087635650665564424 = 2.6087e19
-    uint128_t result = 1;
-    //uint128_t mod128 = ((uint128_t) -1) % n + 1;
-    uint64_t magic = getMagic(n);
-    for (int bit=84; bit>=1; bit--) {
-        if ((n >> bit) & 1) {
-            result *= 2;
-            result -= n * (result >= n); // using an if statement here miiiiight be faster?
-        }
-        result = squareMod84(result, n, magic);
-    }
-    return result == 1;
-}
-
-__device__ bool fermatTest84(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
-    return fermatTest84(n);
-}
 
 // ===== Thanks to Perig for this code ===== 
 //       vvvvvvvvvvvvvvvvvvvvvvvvvvvvv
 
-__host__ __device__ void my_getMagic(uint64_t mod_lo, uint64_t mod_hi, uint64_t * magic1, uint64_t * magic2_lo, uint64_t * magic2_hi)
-{
-	// precomputes (2^128 - 1)/ mod    (a 64 bits number)
-	// slow way, computes a reciprocal with 64 bits accuracy
-	uint128_t mod = ((uint128_t) mod_hi << 64) + mod_lo;
-	uint128_t t = (uint128_t) - 1;
-	// realign the most significant bit of the modulus
-	// by shifting s, this makes 2^64 <= s < 2^65
-	// and 2^63 <= magic1 < 2^64
-	uint128_t s = mod;
-	uint64_t bit = 0;
-	while ((s >> 64) != 1) {
-		s >>= 1;
-		bit++;
-	}
-	t /= s;
-	t >>= bit;
-	*magic1 = (uint64_t) t;
-#if 0
-	// slow
-	// precomputes 2^96 % mod
-	t = 1;
-	t <<= 96;
-	t %= mod;
-	*magic2_lo = (uint64_t) t;
-	*magic2_hi = (uint64_t) (t >> 64);
-#else
-	// faster way : barrett reduction
-	t = (uint128_t) 1 << 96;
-	uint64_t e_hi = *magic1 >> 32;
-	t -= ((uint128_t) mod_lo * e_hi) + (((uint128_t) mod_hi * e_hi) << 64);
-	t = t >= mod ? t - mod : t;
-#if PARANOID
-	assert(t < mod);
-#endif
-	*magic2_lo = (uint64_t) t;
-	*magic2_hi = (uint64_t) (t >> 64);
-#endif
-}
-
-// input n : a number up to 64 + 8 = 72 bits
-// input mod : the modulus withouts top bit (bit 64 is always 1)
-// output result, a number less than 68 bits
-//
-// This code assumes the compiler knows how to optimize in 1 multiplication
-// res_128 = (uint128_t)op1_64 * op2_64
-// This code assumes the compiler knows how to optimize the 64 bits shift 
-// and the constructions of 128 bits.
-
-__host__ __device__ uint128_t my_fastModSqr(uint128_t n, uint64_t mod_lo, uint64_t mod_hi, uint64_t magic1, uint64_t magic2_lo, uint64_t magic2_hi)
-{
-	uint64_t n_lo = (uint64_t) n;
-	uint64_t n_hi = (uint64_t) (n >> 64);	// let assume n_hi is less than 12 bits
-
-#if PARANOID
-	assert(n_hi <= 0xfff);	// less than 12 bits, input number less than 76 bits
-
-	assert(mod_hi > 0);	// at least 1 bit set
-	assert(mod_hi <= 0x1f);	// less than 5 bits, modulus less than 69 bits  
-	assert(magic2_hi <= mod_hi);
-
-	// worst case : input number should not exceed 0xfff/0x1f = ~132 times the modulus
-#endif
-
-	// step 1
-	// do the squaring r = n_lo^2 + n_hi^2 + 2 * n_lo * n_hi;
-	uint128_t lo = (uint128_t) n_lo * n_lo;	// lo is less than 64+64 = 128 bits
-	uint64_t hi = n_hi * n_hi;	// hi is less than 12 + 12 = 24 bits
-#if PARANOID
-	assert((hi >> 24) == 0);
-#endif
-	uint128_t mid = (uint128_t) n_lo * (n_hi * 2);	// mid is less than 64 + 12 + 1 = 77 bits
-#if PARANOID
-	assert((mid >> 77) == 0);
-#endif
-	mid += (uint64_t) (lo >> 64);	// mid is less than 78 bits
-#if PARANOID
-	assert((mid >> 78) == 0);
-#endif
-	lo = (uint64_t) lo;	// lo is less than 64 bits 
-#if PARANOID
-	assert((lo >> 64) == 0);
-#endif
-	// lo += (hi << (96 - 64) + mid >> (96 - 64)) * magic2
-	hi = (hi << 32) + (uint64_t) (mid >> 32);	// hi is less than (24 + 32 = 56) (78 - 32 = 46) -> 57   bits
-#if PARANOID
-	assert((hi >> 57) == 0);
-#endif
-	mid = (uint32_t) mid;	// mid is less than 32 bits
-#if PARANOID
-	assert((mid >> 32) == 0);
-#endif
-	lo += (uint128_t) magic2_lo *hi;	// lo is less than 64+57 = 121 bits
-#if PARANOID
-	assert((lo >> 121) == 0);
-#endif
-	lo += (uint128_t) magic2_hi *hi << 64;	// lo is less than (5 + 57 + 64 = 126)(121) = 127 bits
-#if PARANOID
-	assert((lo >> 127) == 0);
-#endif
-
-	mid += (lo >> 64);	// mid is less than (127 - 64) (32) -> 64 bits
-#if PARANOID
-	assert((mid >> 64) == 0);
-#endif
-	lo = (uint64_t) lo;	// lo is less than 64 bits
-#if PARANOID
-	assert((lo >> 64) == 0);
-#endif
-	uint128_t res = (mid << 64) + lo;	// res is less than (64 + 64) (64) -> 128 bits
-
-	// barrett approximate reduction, less than 4 extra bits left
-	// magic1 is 64 bits, mid is 64 bits
-	uint128_t e = (uint128_t) magic1 * (uint64_t) mid;	// e is less than  (64 + 64) = 128 bits
-	uint64_t e_hi = (uint64_t) (e >> 64);	// e_hi is less than 64 bits
-	res -= ((uint128_t) mod_lo * e_hi);
-	res -= ((uint128_t) mod_hi * e_hi) << 64;
-#if PARANOID
-	assert((res >> 127) == 0);	// would occur with negative number during underflow of barrett calculations (wrong magic1)
-#endif
-	// - barrett reduction : 1 extra subtraction sometimes needed  (about less 50 %)
-	// - barrett magic1 is underestimated by up to 1 : 1 extra subtraction (rarely needed)
-	// -> res is less than 3 times the modulus
-
-#if PARANOID
-	uint128_t m = ((uint128_t) mod_hi << 64) + mod_lo;
-	if (res >= m * 3) {
-		my_printf(res);
-		printf("\n");
-		my_printf(m);
-		printf("\n");
-		assert(res < m * 3);
-	}
-#endif
-	return res;
-
-}
-
-__host__ __device__ bool my_fermatTest660(uint64_t n_lo, uint64_t n_hi)
+// (a::b) <<= c
+__host__ __device__ static inline __attribute__((always_inline))
+void my_shld64(uint64_t * a, uint64_t * b, uint64_t c)
 {
 #if PARANOID
-	// - n must be > 2^64 and < 2^72
-	// - n must be odd (bit 0 is set)
-	assert((n_lo & 1) == 1);
-	assert(n_hi > 0);
+	assert(c < 64);
 #endif
-	// - iterate on 64 bits before squaring would overflow 
-	// and until modular reduction becomes necessary
-	uint128_t result;
-	uint64_t magic1, magic2_lo, magic2_hi;
-	my_getMagic(n_lo, n_hi, &magic1, &magic2_lo, &magic2_hi);
-#if PARANOID
-	assert(magic2_hi <= n_hi);
-#endif
-	int bit = 8;
-	while (!((n_hi >> bit) & 1)) {
-		bit -= 1;
-	}
-	uint64_t result64 = 2;
-	while (bit && result64 <= 38967) {
-		bit -= 1;
-		result64 *= result64;
-		result64 <<= ((n_hi >> bit) & 1);
-	}
-#if PARANOID
-	assert(result64 <= 18444966596872111368ull);	// max 64 bit number after square and double sequence
-#endif
-
-	if (bit == 0) {
-		bit = 64;
-		while (bit && result64 <= 38967) {
-			bit -= 1;
-			result64 *= result64;
-			result64 <<= ((n_lo >> bit) & 1);
-		}
-#if PARANOID
-		assert(result64 <= 18444966596872111368ull);	// max 64 bit number after square and double sequence
-#endif
-		result = result64;
-
+	if (c == 0) {
 	} else {
-		result = result64;
-		while (bit) {
-			bit -= 1;
-#if PARANOID
-			// input constraint
-			assert((result >> 64) <= 0xfff);
+		(*a) = ((*a) << c) | ((*b) >> (64 - c));
+		(*b) <<= c;
+	}
+}
+
+// borrow::diff = a - b - borrow_in
+static inline __attribute__((always_inline))
+__host__ __device__ uint8_t my_sbb64(uint8_t borrow_in, uint64_t a, uint64_t b, uint64_t * diff)
+{
+    uint64_t tmp1 = a - borrow_in;
+    uint8_t borrow = (tmp1 > a);
+
+    uint64_t tmp2 = tmp1 - b;
+    borrow |= (tmp2 > tmp1);
+    *diff = tmp2;
+    return borrow;
+}
+
+// count leading zeroes in binary representation
+static inline __attribute__((always_inline))
+__host__ __device__ uint64_t my_clz64(uint64_t n)
+{
+#ifdef __CUDA_ARCH__
+    return __clzll(n);
+#else
+	if (n == 0)
+		return 64;
+	uint64_t r = 0;
+	if ((n & (0xFFFFFFFFull << 32)) == 0)
+		r += 32, n <<= 32;
+	if ((n & (0xFFFFull << 48)) == 0)
+		r += 16, n <<= 16;
+	if ((n & (0xFFull << 56)) == 0)
+		r += 8, n <<= 8;
+	if ((n & (0xFull << 60)) == 0)
+		r += 4, n <<= 4;
+	if ((n & (0x3ull << 62)) == 0)
+		r += 2, n <<= 2;
+	if ((n & (0x1ull << 63)) == 0)
+		r += 1;
+	return r;
 #endif
-			result = my_fastModSqr(result, n_lo, n_hi, magic1, magic2_lo, magic2_hi);
-			result <<= ((n_hi >> bit) & 1);
-		}
-		bit = 64;
+}
+
+static inline __attribute__((always_inline))
+__host__ __device__ uint64_t montgomeryInverse64(uint64_t mod_lo)
+{
+	uint64_t x = (3ull * mod_lo) ^ 2ull;	// 5 bits acurate
+	uint64_t t = 1ull - mod_lo * x;
+	x *= 1 + t;		// 10 bits accurate
+	t *= t;
+	x *= 1 + t;		// 20 bits accurate
+	t *= t;
+	x *= 1 + t;		// 40 bits accurate
+	t *= t;
+	x *= 1 + t;		// 80 bits accurate , i.e. > 64 bits
+	return 0 - x;
+}
+
+// subtract the modulus 'mod' multiple times from the input number 'res', if needed
+static inline __attribute__((always_inline))
+__host__ __device__ void ciosSubtract128(uint64_t * res_lo, uint64_t * res_hi, uint64_t mod_lo, uint64_t mod_hi)
+{
+	uint64_t n_lo, n_hi;
+	uint64_t t_lo, t_hi;
+	uint8_t b;
+	n_lo = *res_lo;
+	n_hi = *res_hi;
+	// save, subtract the modulus until a borrows occurs
+	do {
+		t_lo = n_lo;
+		t_hi = n_hi;
+		b = my_sbb64(0, n_lo, mod_lo, &n_lo);
+		b = my_sbb64(b, n_hi, mod_hi, &n_hi);
+	}
+	while (b == 0);
+	// get the saved values
+	*res_lo = t_lo;
+	*res_hi = t_hi;
+}
+
+static inline __attribute__((always_inline))
+__host__ __device__ void ciosConstants128(uint64_t mod_lo, uint64_t mod_hi, uint64_t * magic_lo, uint64_t * magic_hi)
+{
+	// computes 2^128 % mod
+	uint128_t m = ((uint128_t) mod_hi << 64) + mod_lo;
+	uint128_t t = -m;	// 2^128-m
+	t %= m;			// (2^128-m) % m
+	*magic_lo = (uint64_t) t;
+	*magic_hi = (uint64_t) (t >> 64);
+#if PARANOID
+	assert(*magic_hi <= mod_hi);
+#endif
+}
+
+static inline __attribute__((always_inline))
+__host__ __device__ void ciosModSquare128(uint64_t * res_lo, uint64_t * res_hi, uint64_t mod_lo, uint64_t mod_hi, uint64_t mmagic)
+{
+	uint64_t n_lo = *res_lo, n_hi = *res_hi;
+	uint128_t cs, cc;
+	uint64_t t0, t1, t2, m;
+
+	cc = (uint128_t) n_lo *n_lo;	// #1
+	t0 = (uint64_t) cc;
+	cc = cc >> 64;
+	cc += (uint128_t) n_lo *(n_hi + n_hi);	// #2
+	t1 = (uint64_t) cc;
+	cc = cc >> 64;
+	t2 = (uint64_t) cc;
+#if PARANOID
+	assert(cc >> 64 == 0);
+#endif
+
+	m = t0 * mmagic;	// #3
+	cs = (uint128_t) m *mod_lo;	// #4
+	cs += t0;
+	cs = cs >> 64;
+
+    cs += (uint128_t) m *mod_hi; // CAN OPTIMIZE
+	cs += t1;
+    
+	t0 = (uint64_t) cs;
+	cs = cs >> 64;
+	cs += t2;
+	t1 = (uint64_t) cs;
+	cs = cs >> 64;
+	t2 = (uint64_t) cs;
+#if PARANOID
+	assert(cs >> 64 == 0);
+#endif
+
+	cc = (uint128_t) n_hi *n_hi;	// #6
+	cc += t1;
+	t1 = (uint64_t) cc;
+	cc = cc >> 64;
+	cc += t2;
+	t2 = (uint64_t) cc;
+#if 0
+	// not necessary with 2-bits guard
+	cc = cc >> 64;
+	uint64_t t3 = (uint64_t) cc;
+	assert(t3 == 0);
+#endif
+#if PARANOID
+	assert(cc >> 64 == 0);
+#endif
+
+	m = t0 * mmagic;	// #3
+	cs = (uint128_t) m *mod_lo;	// #8
+	cs += t0;
+	cs = cs >> 64;
+    
+    cs += (uint128_t) m *mod_hi; // CAN OPTIMIZE
+    
+
+	cs += t1;
+	t0 = (uint64_t) cs;
+	cs = cs >> 64;
+	cs += t2;
+	t1 = (uint64_t) cs;
+#if 0
+	// not necessary with 2-bits guard
+	cs = cs >> 64;
+	cs += t3;
+	t2 = (uint64_t) cs;
+	assert(t2 == 0);
+#endif
+#if PARANOID
+	assert(cs >> 64 == 0);
+#endif
+
+	*res_lo = t0;
+	*res_hi = t1;
+
+}
+
+__host__ __device__ inline void ciosModSquare3_128(uint64_t * res_lo, uint64_t * res_hi, uint64_t mod_lo,
+                                                   uint64_t mod_hi, uint64_t mmagic)
+{
+	ciosModSquare128(res_lo, res_hi, mod_lo, mod_hi, mmagic);
+	ciosModSquare128(res_lo, res_hi, mod_lo, mod_hi, mmagic);
+	ciosModSquare128(res_lo, res_hi, mod_lo, mod_hi, mmagic);
+}
+
+#ifdef HIGH_64
+__host__ __device__ bool ciosFermatTest128(uint64_t n_lo) {
+#else
+__host__ __device__ bool ciosFermatTest128(uint64_t n_lo, uint64_t HIGH_64) {
+#endif
+#if PARANOID
+	assert((n_lo & 1) == 1);
+#endif
+    //const uint64_t n_hi = <stuff here>;
+
+	uint64_t res_lo, res_hi;
+	uint64_t one_lo, one_hi;
+	int bit;
+	// constant -1/m mod 2^64
+	uint64_t mmagic = montgomeryInverse64(n_lo);
+
+	// enter montgomery domain
+	// constant 2^128 mod m
+	ciosConstants128(n_lo, HIGH_64, &one_lo, &one_hi);
+	res_hi = one_hi;
+	res_lo = one_lo;
+
+    if (HIGH_64 == 0) {
+        bit = 64 - my_clz64(n_lo);
+        uint64_t msb_bits = bit < 5 ? bit - 1 : 3;
+        uint64_t msb_mask = (1 << msb_bits) - 1;
+        bit -= msb_bits;
+        my_shld64(&res_hi, &res_lo, (n_lo >> bit) & msb_mask);
+
+    } else {
+        bit = 64 - my_clz64(HIGH_64);
+        uint64_t msb_bits = bit < 4 ? bit : 3;
+        uint64_t msb_mask = (1 << msb_bits) - 1;
+        bit -= msb_bits;
+        my_shld64(&res_hi, &res_lo, (HIGH_64 >> bit) & msb_mask);
+
+        while (bit >= 3) {
+            bit -= 3;
+            // square and reduce
+            ciosModSquare3_128(&res_lo, &res_hi, n_lo, HIGH_64, mmagic);
+            // shift
+            my_shld64(&res_hi, &res_lo, ((HIGH_64 >> bit) & 7));
+        }
+
+        while (bit) {
+            bit -= 1;
+            // square and reduce
+            ciosModSquare128(&res_lo, &res_hi, n_lo, HIGH_64, mmagic);
+            // shift
+            my_shld64(&res_hi, &res_lo, ((HIGH_64 >> bit) & 1));
+        }
+
+        bit = 64;
+    }
+	//}
+	while (bit >= 5) {
+		bit -= 3;
+		// square and reduce
+		ciosModSquare3_128(&res_lo, &res_hi, n_lo, HIGH_64, mmagic);
+		// shift
+		my_shld64(&res_hi, &res_lo, ((n_lo >> bit) & 7));
 	}
 
-	uint128_t n = ((uint128_t) n_hi << 64) + n_lo;
-	// - iterate on 128 bits with modular reduction
-	// - at each step and intermediate numbers are only
-	//   a few bits larger than the modulus
-	// - the last iteration is optimized out the loop
 	while (bit > 1) {
-		// advance 1 bits at a time
 		bit -= 1;
 		// square and reduce
-#if PARANOID
-		// input constraint
-		assert((result >> 64) <= 0xfff);
-#endif
-		result = my_fastModSqr(result, n_lo, n_hi, magic1, magic2_lo, magic2_hi);
-#if PARANOID
-		assert(result < 3 * n);
-#endif
-		// and let the number overflow a little bit
-		// - result is less than 6m   (quite over-rounded)
-		result <<= ((n_lo >> bit) & 1);
+		ciosModSquare128(&res_lo, &res_hi, n_lo, HIGH_64, mmagic);
+		// shift
+		my_shld64(&res_hi, &res_lo, ((n_lo >> bit) & 1));
 	}
 
-	// - last round with 1 bit to process
-	// - Euler's criterion 2^(n>>1) == legendre_symbol(2,n) (https://en.wikipedia.org/wiki/Euler%27s_criterion)
-	// - This skips the modexp last round. Thanks Mr Leonhard.
-	// - shortcut calculation of legendre symbol (https://en.wikipedia.org/wiki/Legendre_symbol)
-	// legendre_symbol(2,n) = 1 if n = 1 or 7 mod 8     (when bits 1 and 2 are same)
-	// legendre_symbol(2,n) = -1 if n = 3 or 5 mod 8    (when bits 1 and 2 are different)
-	uint64_t legendre = ((n_lo >> 1) & 1) ^ ((n_lo >> 2) & 1);	// shortcut calculation of legendre symbol
-	uint128_t expected = legendre ? n - 1 : 1;	// shortcut calculation of legendre symbol
+	// make sure result is strictly less than the modulus
+	ciosSubtract128(&res_lo, &res_hi, n_lo, HIGH_64);
 
-	// - final reductions :  result %= n;
-	// - the last operation was a multiplication by 1,2,4, or 8, without reduction. 
-	//   therefore, there are many extra bits to shave. worst case is 7 bits.
-	// - use repeated subtractions within a log2 algorithm
-	uint128_t t = n;
-	while (t < result)
-		t *= 2;
-	while (t >= n) {
-		if (result >= t) {
-			result -= t;
-		}
-		t >>= 1;
-	}
+	uint64_t legendre = ((n_lo >> 1) ^ (n_lo >> 2)) & 1;	// shortcut calculation of legendre symbol
 
-#if PARANOID
-	assert(result < n);
-#endif
-	// check if the number is composite
-	//   return false : n is composite for sure
-	//   return true : n is maybe prime, more tests are needed (like Lucas test)
-	//
-	// - Fermat:
-	//   (2^(n-1) == 1) mod n
-	//
-	// - Euler criterion:
-	//   (2^(n>>1) == 1) mod n
-	//   (2^(n>>1) == n-1) mod n
-	return result == expected;
+	uint64_t m1_lo;
+	uint64_t m1_hi;
+	uint8_t c;
+	c = my_sbb64(0, n_lo, one_lo, &m1_lo);
+	my_sbb64(c, HIGH_64, one_hi, &m1_hi);
+
+	return ((res_lo == (legendre ? m1_lo : one_lo)) && (res_hi == (legendre ? m1_hi : one_hi)));
 }
+
+
+// ciosFermatTest128 should be used for up to 119 bits
+// montgomeryFermatTest128 should be used fro 120-127 bits
+
 
 
 //       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -562,27 +540,34 @@ __host__ __device__ bool my_fermatTest660(uint64_t n_lo, uint64_t n_hi)
 
 // POTENTIAL OPTIMIZATION: REUSE MAGIC CALCULATIONS FOR MULTIPLE FERMAT TESTS
 
+
+/*
 __host__ __device__ bool fermatTest65(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
     // estimate of magic1(n) is:  magicp - 2^128*d//p^2
     // orig_magic should be precomputed as get_magic1(start)
     // orig_derivative should be 2^128 / start^2
     uint64_t magic = orig_magic - (uint64_t) (orig_derivative*delta); // this might be 1 more or 1 less than correct
     uint128_t test = ((uint128_t) (magic+2)) * n;
-    /*if (test >= n+n+n) {
-        printf("BAD FERMAT TEST: n=%lu%019lu, delta=%u orig_magic=%lu orig_derivative=%f magic=%lu test=%lu%019lu\n",
-            hi19(n), lo19(n), delta, orig_magic, orig_derivative, magic, hi19(test), lo19(test));
-        assert(false);
-    }*/
+    if (test >= n+n+n) {
+        //printf("BAD FERMAT TEST: n=%lu%019lu, delta=%u orig_magic=%lu orig_derivative=%f magic=%lu test=%lu%019lu\n",
+        //    hi19(n), lo19(n), delta, orig_magic, orig_derivative, magic, hi19(test), lo19(test));
+        //assert(false);
+    }
     if (test >= n+n) magic--;// TODO: CAN WE JUST GET RID OF THESE?
     if (test < n) magic++;
     // where d = n-p, aand 2^128/p^2 is precalculated as a double
-    return my_fermatTest660(n, magic);
+    return ciosFermatTest128(n, magic);
 }
+*/
 
 __host__ __device__ bool fermatTestPerig(uint128_t n, uint32_t delta, uint64_t orig_magic, double orig_derivative) {
     // all arguments other than n are unused - we just keep it the same format as fermatTest65
     //uint64_t magic1 = my_getMagic1(n);
-    return my_fermatTest660((uint64_t) n, (uint64_t) (n>>64));
+#ifdef HIGH_64
+    return ciosFermatTest128((uint64_t) n);
+#else
+    return ciosFermatTest128((uint64_t) n, (uint64_t) (n>>64));
+#endif
 }
 
 
@@ -704,7 +689,7 @@ __device__ void sieveMediumPrimes(uint32_t* sieve, uint32_t sieveLengthWords, ui
         bitIdx = (threadIdx.x % 2)*4;
         numBits = 4;
         pIdx = (threadIdx.x-128)/2 + 8+16;
-    } else { // the remaining 320 threads each handle 1 prime by themselves
+    } else { // the remaining threads each handle 1 prime by themselves
         bitIdx = 0;
         numBits = 8;
         pIdx = threadIdx.x-SIEVING_DUPLICATED_PRIMES;
@@ -1394,8 +1379,11 @@ void printGap(uint128_t startPrime, uint128_t endPrime) {
             }
         }
     }
-
-    printf(": %lu%019lu %u %.6f%s\n", hi19(startPrime), lo19(startPrime), gap, gap/log(startPrime), suffix.c_str());
+    if (startPrime >> 64) {
+        printf(": %lu%019lu %u %.6f%s\n", hi19(startPrime), lo19(startPrime), gap, gap/log(startPrime), suffix.c_str());  
+    } else {
+        printf(": %lu %u %.6f%s\n", (uint64_t) startPrime, gap, gap/log(startPrime), suffix.c_str());
+    }
 }
 
 void cpuFindGapAround(uint128_t n, uint32_t minGap) {
@@ -1497,25 +1485,18 @@ std::chrono::_V2::system_clock::time_point printProgress(
     exit(1);
 }*/
 
-void tests2() {
-    uint128_t s = 0x2000000200000200UL; //2^61
-    s *= 16; //2^65
-    int primes = 0;
-    printf("Doing\n");
-    for (uint128_t p=s+1; p<s+1000000; p+=2) {
-        //printf("asdf prime %lu", (uint64_t) (p%10000000000000000000UL));
-        if (FERMAT_TEST(p, 0, 0, 0)) {
-            //printf("Found prime %lu", (uint64_t) (p%10000000000000000000UL));
-            primes += 1;
-        }
-    }
-    printf("%d\n", primes);
-}
-
 
 
 int main(int argc, char* argv[]) {
     setbuf(stdout, NULL);
+
+    /*for (long lo=3106524393915332021; lo<3106524393915333021; lo+=2) {
+        bool result = ciosFermatTest128(lo, 2);
+        if (result) {
+            printf("Prime at lo=%lu\n", lo);
+        }
+    }
+    return 0;*/
 
     if (argc < 4 || argc > 5) {
         printf("Usage: ./prime_gaps.out <minGap> <start> [numBlocks] [deviceNum]\n");
@@ -1614,7 +1595,7 @@ int main(int argc, char* argv[]) {
     
     auto start1 = std::chrono::high_resolution_clock::now();
     makeSmallPrimeWheels<<<96,512>>>(smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4);
-    cudaDeviceSynchronize();
+    HANDLE_ERROR(cudaDeviceSynchronize());
     auto finish1 = std::chrono::high_resolution_clock::now();
     std::cout << "Done in " << std::chrono::duration_cast<std::chrono::nanoseconds>(finish1-start1).count()/1e9 << " seconds\n";
    
@@ -1651,6 +1632,11 @@ int main(int argc, char* argv[]) {
 #else
     int blocksToTest = atoi(argv[3]);
     uint32_t minGapSize = atoi(argv[1]);
+#endif
+
+#ifdef HIGH_64
+    assert(sieveStart >> 64 == HIGH_64);
+    assert((sieveStart + BLOCK_SIZE*blocksToTest) >> 64 == HIGH_64);
 #endif
 
 #if (WORD_LENGTH == 120) || (WORD_LENGTH == 240)

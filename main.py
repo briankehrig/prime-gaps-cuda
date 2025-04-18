@@ -466,10 +466,10 @@ def main():
             print("Done")
     
     elif runMode in ("run", "forcerun"):
-        recompile(parameters, deviceIdx)
         with open(WORKTODO_FILE) as f:
             work = f.read().split('\n')
     
+        high64 = None
         for line in work:
             line = line.split("#")[0].strip()
             if not line: continue
@@ -494,11 +494,11 @@ def main():
             if start >= end:
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be < end)")
                 continue
-            if start*10**12 < 2**64:
-                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >2^64)")
+            if start < 1:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >=1e12)")
                 continue
-            if end*10**12 > 2**69:
-                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be >2^69)")
+            if end*10**12 > 2**78:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be >2^78)")
                 continue
             if minGap % (parameters["WORD_LENGTH"]//4):
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' "
@@ -528,6 +528,15 @@ def main():
                         f"(finish using 'main.py <deviceIdx> continue'){Style.RESET}")
                     continue
 
+            high64_start = (start*10**12) >> 64
+            high64_end = (end*10**12) >> 64
+            if high64_start == high64_end:
+                parameters["HIGH_64"] = high64_start
+            else:
+                if "HIGH_64" in parameters: parameters.pop("HIGH_64")
+                printWarn(f"This work unit sits on a 64-bit border, it might be slower than usual!")
+
+            recompile(parameters, deviceIdx)
             print(f"Running work unit: '{line}' {msg}")
             startTime = dt.datetime.now(dt.timezone.utc)
             results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx, logFilename, startTime)
