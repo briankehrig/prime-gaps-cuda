@@ -466,10 +466,10 @@ def main():
             print("Done")
     
     elif runMode in ("run", "forcerun"):
-        recompile(parameters, deviceIdx)
         with open(WORKTODO_FILE) as f:
             work = f.read().split('\n')
     
+        high64 = None
         for line in work:
             line = line.split("#")[0].strip()
             if not line: continue
@@ -504,6 +504,16 @@ def main():
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' "
                         f"(minGap must be a multiple of {parameters['WORD_LENGTH']//4})")
                 continue
+
+            high64_start = (start*10**12) >> 64
+            high64_end = (end*10**12) >> 64
+            if high64_start == high64_end:
+                parameters["HIGH_64"] = high64_start
+            else:
+                if "HIGH_64" in parameters: parameters.pop("HIGH_64")
+                print(f"{Style.MAGENTA}This work unit sits on a 64-bit border, it might be slower than usual!{Style.RESET}")
+
+            recompile(parameters, deviceIdx)
 
             msg = ""
             logFilename = getLogFileName(start, end, minGap)
