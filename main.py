@@ -494,8 +494,8 @@ def main():
             if start >= end:
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be < end)")
                 continue
-            if start*10**12 < 0*2**64:
-                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >2^64)")
+            if start < 1:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >=1e12)")
                 continue
             if end*10**12 > 2**78:
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be >2^78)")
