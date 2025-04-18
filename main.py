@@ -494,7 +494,7 @@ def main():
             if start >= end:
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be < end)")
                 continue
-            if start*10**12 < 2**64:
+            if start*10**12 < 0*2**64:
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >2^64)")
                 continue
             if end*10**12 > 2**78:
@@ -504,16 +504,6 @@ def main():
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' "
                         f"(minGap must be a multiple of {parameters['WORD_LENGTH']//4})")
                 continue
-
-            high64_start = (start*10**12) >> 64
-            high64_end = (end*10**12) >> 64
-            if high64_start == high64_end:
-                parameters["HIGH_64"] = high64_start
-            else:
-                if "HIGH_64" in parameters: parameters.pop("HIGH_64")
-                print(f"{Style.MAGENTA}This work unit sits on a 64-bit border, it might be slower than usual!{Style.RESET}")
-
-            recompile(parameters, deviceIdx)
 
             msg = ""
             logFilename = getLogFileName(start, end, minGap)
@@ -538,6 +528,15 @@ def main():
                         f"(finish using 'main.py <deviceIdx> continue'){Style.RESET}")
                     continue
 
+            high64_start = (start*10**12) >> 64
+            high64_end = (end*10**12) >> 64
+            if high64_start == high64_end:
+                parameters["HIGH_64"] = high64_start
+            else:
+                if "HIGH_64" in parameters: parameters.pop("HIGH_64")
+                printWarn(f"This work unit sits on a 64-bit border, it might be slower than usual!")
+
+            recompile(parameters, deviceIdx)
             print(f"Running work unit: '{line}' {msg}")
             startTime = dt.datetime.now(dt.timezone.utc)
             results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx, logFilename, startTime)
