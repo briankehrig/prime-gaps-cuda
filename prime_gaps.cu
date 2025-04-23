@@ -351,7 +351,11 @@ __host__ __device__ void ciosConstants128(uint64_t mod_lo, uint64_t mod_hi, uint
 	*magic_lo = (uint64_t) t;
 	*magic_hi = (uint64_t) (t >> 64);
 #if PARANOID
-	assert(*magic_hi <= mod_hi);
+    if (*magic_hi > mod_hi) {
+        printf("ERROR: Fermat test fail: ciosConstants128 %lu %lu\n", mod_lo, mod_hi);
+        assert(false);
+    }
+	//assert(*magic_hi <= mod_hi);
 #endif
 }
 
@@ -428,6 +432,10 @@ __host__ __device__ void ciosModSquare128(uint64_t * res_lo, uint64_t * res_hi, 
 	assert(t2 == 0);
 #endif
 #if PARANOID
+    if (cs >> 64 != 0) {
+        printf("ERROR: Fermat test fail: ciosModSquare128 %lu %lu\n", mod_lo, mod_hi);
+        assert(false);
+    }
 	assert(cs >> 64 == 0);
 #endif
 
