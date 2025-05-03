@@ -38,7 +38,7 @@
         // The number of primes to sieve with, after sieving with the small prime wheels is done.
         // Must be a multiple of 512.
         // 4096 is usually good, but with the Titan V the optimal number is as high as 8192.
-        "NUM_MEDIUM_PRIMES_BASE": -1
+        "NUM_MEDIUM_PRIMES_BASE": 1024
     },
     "ReportOptions": {
         // Whether to sort the gaps in the output file by their gap size.

@@ -23,3 +23,5 @@ side_code.txt
 test_fermat.cpp
 test.txt
 prime_gaps.h
+
+temp/*
