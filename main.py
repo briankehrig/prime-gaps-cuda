@@ -346,7 +346,8 @@ def writeOutputFile(parameters, start, end, minGap, results, reportOptions, star
     if hundredStats: hundredStats = "\n" + hundredStats
     
     if results:
-        largest = [r for r in results if r[0] == max(x[0] for x in results)]
+        largestGap = max(x[0] for x in results)
+        largest = [r for r in results if r[0] == largestGap]
 
         largest.sort(key=lambda x: x[2])
         if reportOptions["SORT_OUTPUT_BY_GAPSIZE"]:
@@ -427,8 +428,12 @@ def main():
             logfile = logfile[4:] # remove 'log_' at the start
             if os.path.exists(f"reports/GapReport_{logfile}"): continue
 
-            with open(f"logs/log_{logfile}") as f:
-                logdata = f.read().split('\n')
+            try:
+                with open(f"logs/log_{logfile}") as f:
+                    logdata = f.read().split('\n')
+            except FileNotFoundError:
+                # sometimes this can happen for some reason, maybe hidden/permission restricted files
+                continue
             newDeviceIdx = int(logdata[0])
             if newDeviceIdx != deviceIdx:
                 continue # not for us to do
