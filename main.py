@@ -168,6 +168,7 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
     while (gpuBlocks % 2 == 0): gpuBlocks //= 2
     while (gpuBlocks <= 128 or gpuBlocks*512 < deviceInfo["CUDACores"]): gpuBlocks *= 2
     recommended["GPU_BLOCKS"] = gpuBlocks
+    recommended["GPU_THREADS"] = 512
 
     # we divide targetMemoryUsage by 2 since we will have 2 lists in memory at the same time
     # we first subtract 1.5 GB since that's about how much the small prime wheels take up

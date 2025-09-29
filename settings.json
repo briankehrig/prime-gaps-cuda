@@ -9,6 +9,9 @@
 
         // The number of GPU blocks to run the kernel with. Recommended to keep this at -1
         "GPU_BLOCKS": -1,
+
+        // The number of GPU threads to run the kernel with. Usually either 256 or 512 works best (must be >=256)
+        "GPU_THREADS": -1,
         
         // The size of the interval on the number line that a single kernel will sieve.
         // Recommended to keep this at -1, but it may be worth tinkering with this value a bit
