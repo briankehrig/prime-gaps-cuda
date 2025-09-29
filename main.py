@@ -218,6 +218,10 @@ def sanityCheckParameters(parameters, minGap):
     if parameters["RUN_FROM_PYTHON"] != 1:
         printError(f"ERROR: RUN_FROM_PYTHON must be 1")
         sys.exit(1)
+    
+    if parameters["GPU_THREADS"] % 256 != 0:
+        printError(f"ERROR: GPU_THREADS must be a multiple of 256")
+        sys.exit(1)
 
 def progressBar(length, progress):
     filled = min(length, int(progress*(length+1)))
