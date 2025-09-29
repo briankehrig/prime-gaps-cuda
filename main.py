@@ -219,7 +219,7 @@ def sanityCheckParameters(parameters, minGap):
         printError(f"ERROR: RUN_FROM_PYTHON must be 1")
         sys.exit(1)
     
-    if parameters["GPU_THREADS"] % 256 != 0:
+    if "GPU_THREADS" in parameters and parameters["GPU_THREADS"] % 256 != 0:
         printError(f"ERROR: GPU_THREADS must be a multiple of 256")
         sys.exit(1)
 
