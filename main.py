@@ -171,9 +171,7 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
 
     # we divide targetMemoryUsage by 2 since we will have 2 lists in memory at the same time
     # we first subtract 1.5 GB since that's about how much the small prime wheels take up
-    blockSize = int((deviceInfo["GlobalMemGB"]-1.5)*2**30 * targetMemoryUsage/2) * recommended["WORD_LENGTH"]//4
-    blockSize -= blockSize % (recommended["SHARED_SIZE_WORDS"] * recommended["WORD_LENGTH"] * recommended["GPU_BLOCKS"])
-    recommended["BLOCK_SIZE"] = blockSize
+    recommended["BLOCK_SIZE"] = int((deviceInfo["GlobalMemGB"]-1.5)*2**30 * targetMemoryUsage/2) * recommended["WORD_LENGTH"]//4
 
     # TODO: The above calculation needs to depend on the ACTUAL value of SHARED_SIZE_WORDS, not the recommended value!!
     '''
@@ -421,6 +419,9 @@ def main():
 
     parameters["PROGRESS_EVERY"] = 1 # this should never be changed
     parameters["RUN_FROM_PYTHON"] = 1 # this should never be changed
+    
+    parameters["BLOCK_SIZE"] -= parameters["BLOCK_SIZE"] % \
+        (parameters["SHARED_SIZE_WORDS"] * parameters["WORD_LENGTH"] * parameters["GPU_BLOCKS"])
 
     
     if runMode == "continue":

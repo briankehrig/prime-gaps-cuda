@@ -33,6 +33,10 @@ typedef unsigned __int128 uint128_t;
 #define GPU_BLOCKS 192
 #endif
 
+#ifndef GPU_THREADS
+#define GPU_THREADS 512
+#endif
+
 #if RUN_TESTS
     #define BLOCK_SIZE 46080000000
     #define WORD_LENGTH 120
@@ -104,7 +108,7 @@ __constant__ uint8_t NEXT_SIEVE_HIT[32][WORD_LENGTH/2][3];
 #endif
 
 #ifndef PROPORTION_OF_BLOCKS_FOR_SIEVING
-#define PROPORTION_OF_BLOCKS_FOR_SIEVING 0.75
+#define PROPORTION_OF_BLOCKS_FOR_SIEVING 0.5
 #endif
 
 #define NUM_MEDIUM_PRIMES (NUM_MEDIUM_PRIMES_BASE - SIEVING_DUPLICATED_PRIMES)
@@ -628,7 +632,7 @@ __device__ void sieveMediumLargePrimesInner(uint32_t* sieve, uint32_t sieveLengt
         // [prime0bit0, prime1bit0, prime2bit0 .... prime0bit1 ...]
 
         /*
-        SEGMENTED SIEVE FOR LARGE PRIMES:
+        SEGMENTED SIEVE FOR LARGE PRIMES: (not implemented yet, first try was slower than it was before)
         Suppose we are doing a segmented sieve with 32768 primes.
         The interval of 92,160,000,000 is split into 192 parts for the 192 blocks, each gets 480,000,000.
         The width of one segment is 8192 * 120 = 983,040 which is about 488.28125 (488 or 489) segments per block.
@@ -829,11 +833,12 @@ __device__ void sieveAll(uint32_t* globalSieve, uint128_t sieveStart, uint32_t s
 
     // the extra stuff here is only here to prevent crashing when we have 0 large primes
     WordPosition nextLargePrimeSieveHits[NUM_LARGE_PRIMES/256 + (NUM_LARGE_PRIMES < 256)];
-    // THIS CODE REQUIRES THERE TO BE 256 THREADS IN A BLOCK!!
+
+    /*
     // This for loop initializes the segmented sieve for large primes
-    for (int i=0; i<NUM_LARGE_PRIMES/256; i++) {
-        // thread N will deal with primes N, N+256, N+512, N+768...
-        int pidx = i*256 + threadIdx.x;
+    for (int i=0; i<NUM_LARGE_PRIMES/blockIdx.x; i++) {
+        // thread N will deal with primes N, N+256, N+512, N+768... if there are 256 threads per block
+        int pidx = i*blockIdx.x + threadIdx.x; // can optimize, increment pidx each time instead of multiplying
         int p = primeList[NUM_SMALL_PRIMES+NUM_MEDIUM_PRIMES+pidx];
         
         int testOffset = p - ((sieveStart + ((uint64_t) firstSharedBlockIdx)*SHARED_SIZE_WORDS*WORD_LENGTH) % p);
@@ -848,6 +853,7 @@ __device__ void sieveAll(uint32_t* globalSieve, uint128_t sieveStart, uint32_t s
         nextLargePrimeSieveHits[i].wordIdx = testOffset / WORD_LENGTH;
         nextLargePrimeSieveHits[i].posInWord = testOffset % WORD_LENGTH;
     }
+    */
 
     __syncthreads();
     
@@ -1185,12 +1191,12 @@ void deviceInfo() {
         cudaGetDeviceProperties(&prop, i);
         printf("Device Number: %d\n", i);
         printf("  Device name: %s\n", prop.name);
-        printf("  Memory Clock Rate (MHz): %d\n",
-                prop.memoryClockRate/1024);
+        //printf("  Memory Clock Rate (MHz): %d\n",
+        //        prop.memoryClockRate/1024);
         printf("  Memory Bus Width (bits): %d\n",
                 prop.memoryBusWidth);
-        printf("  Peak Memory Bandwidth (GB/s): %.1f\n",
-                2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6);
+        //printf("  Peak Memory Bandwidth (GB/s): %.1f\n",
+        //        2.0*prop.memoryClockRate*(prop.memoryBusWidth/8)/1.0e6);
         printf("  Total global memory (Gbytes) %.1f\n",(float)(prop.totalGlobalMem)/1024.0/1024.0/1024.0);
         printf("  Shared memory per block (Kbytes) %.1f\n",(float)(prop.sharedMemPerBlock)/1024.0);
         printf("  Number of multiprocessors: %d\n",prop.multiProcessorCount);
@@ -1198,7 +1204,7 @@ void deviceInfo() {
         printf("  Warp-size: %d\n", prop.warpSize);
         printf("  L2 cache size: %d\n", prop.l2CacheSize);
         printf("  Concurrent kernels: %s\n", prop.concurrentKernels ? "yes" : "no");
-        printf("  Concurrent computation/communication: %s\n\n",prop.deviceOverlap ? "yes" : "no");
+        //printf("  Concurrent computation/communication: %s\n\n",prop.deviceOverlap ? "yes" : "no");
     }
 }
 
@@ -1364,11 +1370,10 @@ void printGap(uint128_t startPrime, uint128_t endPrime) {
 #endif
     uint32_t gap = endPrime-startPrime;
     std::string suffix = "";
-    int missing[] = {1484,1492,1498,1504,1508,1512,1514,1516,1518,1522,
-                     1532,1534,1538,1542,1546,1558,1560,1562,1564,1566,1570,
-                     1574,1580,1582,1584,1586,1588,1590,1594,1596,1598,1600,1602,1604,1606,
+    int missing[] = {1504,1514,1532,1538,1546,1558,1560,1562,1570,
+                     1574,1580,1582,1584,1586,1588,1590,1594,1596,1598,1602,1604,1606,
                      1608,1610,1612,1614,1616,1618,1620,1622,1624,1626,1630,1632,1634,1638,1640,
-                     1642,1644,1646,1648,1650,1652,1654,1656,1658,1660,1662,1664,1666,1668,1670,1672,1674};
+                     1642,1646,1648,1650,1652,1654,1656,1658,1660,1662,1664,1666,1668,1670,1672,1674};
     if (gap > 1676) {
         suffix = " MAXIMAL";
     } else {
@@ -1617,7 +1622,7 @@ int main(int argc, char* argv[]) {
     HANDLE_ERROR(cudaMallocManaged((void **) &lastPrimeInBlock, sizeof(uint128_t)));
 
     HANDLE_ERROR(cudaMemset(globalSieve1, 0, sieveLengthWords * sizeof(uint32_t)));
-    kernel<<<GPU_BLOCKS,256>>>(
+    kernel<<<GPU_BLOCKS,GPU_THREADS>>>(
         globalSieve1, sieveStart, (uint32_t) sieveLengthWords,
         primeListCuda, rhoListCuda, primeModsCuda, primeList.size(),
         smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4
@@ -1673,7 +1678,7 @@ int main(int argc, char* argv[]) {
         if (i==2) assert(resultListHost[0].gap == 25);
 #endif
 
-        kernelBoth<<<GPU_BLOCKS,256>>>(
+        kernelBoth<<<GPU_BLOCKS,GPU_THREADS>>>(
             globalSieve2, globalSieve1, sieveStart+sieveLength, (uint32_t) sieveLengthWords,
             minGapSize, primeListCuda, rhoListCuda, primeModsCuda, primeList.size(),
             smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4,
@@ -1727,7 +1732,7 @@ int main(int argc, char* argv[]) {
     assert(resultListHost[0].gap == 12); // only 12 gaps of size >=720 in this block, a lot less than expected
 #endif
 
-    kernel2<<<GPU_BLOCKS,256>>>(globalSieve1, sieveStart, sieveLengthWords, minGapSize,
+    kernel2<<<GPU_BLOCKS,GPU_THREADS>>>(globalSieve1, sieveStart, sieveLengthWords, minGapSize,
                                 resultList, firstPrimeInBlock, lastPrimeInBlock);
     displayResultsAndClear(resultListHost, minGapSize);
     HANDLE_ERROR(cudaDeviceSynchronize());
