@@ -1449,12 +1449,12 @@ void displayResultsAndClear(PrimeGap* resultList, uint32_t minGapSize) {
     resultList[0].gap = 0;
 }
 
-std::chrono::_V2::system_clock::time_point printProgress(
-    std::chrono::_V2::system_clock::time_point start,
-    std::chrono::_V2::system_clock::time_point lastFinish,
+std::chrono::_V2::steady_clock::time_point printProgress(
+    std::chrono::_V2::steady_clock::time_point start,
+    std::chrono::_V2::steady_clock::time_point lastFinish,
     uint128_t sieveStart, int i
 ) {
-    auto finish = std::chrono::high_resolution_clock::now();
+    std::chrono::steady_clock::time_point finish = std::chrono::steady_clock::now();
     double totalSecs = std::chrono::duration_cast<std::chrono::nanoseconds>(finish-start).count()/1e9;
     double lastSecs = std::chrono::duration_cast<std::chrono::nanoseconds>(finish-lastFinish).count()/1e9;
     double speed = BLOCK_SIZE * PROGRESS_UPDATE_BLOCKS / lastSecs;
@@ -1579,11 +1579,11 @@ int main(int argc, char* argv[]) {
     /*int offset=78498; // doing primes from 1M to 1.1M
     printf("using asdf %u\n", (primeList.size()-offset));
     
-    auto startp = chrono::high_resolution_clock::now();
+    std::chrono::steady_clock::time_point startp = chrono::steady_clock::now();
     sievePseudoprimesSeparate<<<384,64>>>(sieveStart, 100000000000000UL,
                                           primeListCuda+offset, rhoListCuda+offset, 7216); //primeList.size()-offset);
     cudaDeviceSynchronize();
-    auto finishp = chrono::high_resolution_clock::now();
+    std::chrono::steady_clock::time_point finishp = chrono::steady_clock::now();
     cout << "Done in " << chrono::duration_cast<chrono::nanoseconds>(finishp-startp).count()/1e9 << " seconds\n";
     return 0;*/
 
@@ -1598,10 +1598,10 @@ int main(int argc, char* argv[]) {
     HANDLE_ERROR(cudaMalloc((void **) &smallPrimeWheel4, (71*73*79*83) * sizeof(uint32_t)));
     printf("Making small prime sieve\n");
     
-    auto start1 = std::chrono::high_resolution_clock::now();
+    std::chrono::steady_clock::time_point start1 = std::chrono::steady_clock::now();
     makeSmallPrimeWheels<<<96,512>>>(smallPrimeWheel1, smallPrimeWheel2, smallPrimeWheel3, smallPrimeWheel4);
     HANDLE_ERROR(cudaDeviceSynchronize());
-    auto finish1 = std::chrono::high_resolution_clock::now();
+    std::chrono::steady_clock::time_point finish1 = std::chrono::steady_clock::now();
     std::cout << "Done in " << std::chrono::duration_cast<std::chrono::nanoseconds>(finish1-start1).count()/1e9 << " seconds\n";
    
     // here is where we could run tests for small prime wheels
@@ -1658,8 +1658,8 @@ int main(int argc, char* argv[]) {
 #endif
     printf("Searching for gaps of size >= %d...\n", minGapSize);
     
-    auto start = std::chrono::high_resolution_clock::now();
-    auto finish = start;
+    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+    std::chrono::steady_clock::time_point finish = start;
     for (int i=0; i<blocksToTest-1; i++) {
         /* In this loop, we are: (0-indexed)
         Sieving block i+1,
