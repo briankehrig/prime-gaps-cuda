@@ -42,6 +42,7 @@ typedef unsigned __int128 uint128_t;
     #define WORD_LENGTH 120
     #define WORD_SIEVING_LENGTH 120
     #define MIN_GAP_SIZE 720
+    #define HIGH_64 1
 #else
 
 #ifndef MIN_GAP_SIZE
