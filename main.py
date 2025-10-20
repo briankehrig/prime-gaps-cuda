@@ -2,8 +2,10 @@ import datetime as dt
 import json
 import math
 import os
+import select
 import subprocess as subp
 import sys
+import time
 
 # TODO: Detect shared memory size
 # TODO: Detect duplicated work units with different device IDs
@@ -67,10 +69,23 @@ def printError(thing, *args, **kwargs):
 
 def getStdoutWhileRunning(cmd):
     with subp.Popen(cmd, stdout=subp.PIPE, bufsize=1, universal_newlines=True) as p:
-        for line in p.stdout:
-            yield line
-    if p.returncode != 0:
-        raise subp.CalledProcessError(p.returncode, p.args)
+        while True:
+            # Wait until there's data ready to read, or timeout expires
+            ready, _, _ = select.select([p.stdout], [], [], 30)
+            if ready:
+                line = p.stdout.readline()
+                if not line:  # EOF
+                    p.wait()
+                    break
+                yield line
+            else:
+                # Timeout expired — no new data
+                p.kill()
+                raise TimeoutError(f"No output received in {30} seconds. Last line was: {line.rstrip('\n')}")
+            time.sleep(0.001)
+        if p.returncode != 0:
+            print(p.returncode)
+            raise subp.CalledProcessError(p.returncode, p.args)
 
 def stringRepresents(string):
     try:
@@ -211,8 +226,8 @@ def sanityCheckParameters(parameters, minGap):
     if parameters["PROPORTION_OF_BLOCKS_FOR_SIEVING"] not in (0.5,0.75):
         printWarn(f"WARNING: PROPORTION_OF_BLOCKS_FOR_SIEVING should be 0.5 (sometimes 0.75) to optimize speed")
 
-    if parameters["PROGRESS_EVERY"] != 1:
-        printError(f"ERROR: PROGRESS_EVERY must be 1")
+    if parameters["PROGRESS_UPDATE_BLOCKS"] != 1:
+        printError(f"ERROR: PROGRESS_UPDATE_BLOCKS must be 1")
         sys.exit(1)
 
     if parameters["RUN_FROM_PYTHON"] != 1:
@@ -290,11 +305,10 @@ def runOne(parameters, start, end, minGap, deviceIdx, logFilename, startTime, sk
     if not os.path.exists(logFilename):
         printLog(f"{deviceIdx}\n{json.dumps(parameters)}\n{startTime}\n")
     dataToLog = ""
-
-    for line in getStdoutWhileRunning(
-        ['./'+getCompiledCudaFile(deviceIdx), str(minGap), str(start),
+    allParams = ['./'+getCompiledCudaFile(deviceIdx), str(minGap), str(start),
          str(blocksToTest - skippedBlocks), str(deviceIdx)]
-    ):
+    print('Run command:', ' '.join(allParams))
+    for line in getStdoutWhileRunning(allParams):
         #print(line, end='')
         line = line.split()
         if line[0] == "Progress":
@@ -327,6 +341,7 @@ def runOne(parameters, start, end, minGap, deviceIdx, logFilename, startTime, sk
                 dataToLog += f"Gap {gap} {merit:.4f} {p}\n"
         elif line[0] == "ERROR:":
             print(' '.join(line))
+        # any other line is ignored
     return allResults
 
 def formatDatetime(dt):
@@ -422,7 +437,7 @@ def main():
         if settings["KernelOptions"][setting] != -1:
             parameters[setting] = settings["KernelOptions"][setting]
 
-    parameters["PROGRESS_EVERY"] = 1 # this should never be changed
+    parameters["PROGRESS_UPDATE_BLOCKS"] = 1 # this should never be changed
     parameters["RUN_FROM_PYTHON"] = 1 # this should never be changed
     
     parameters["BLOCK_SIZE"] -= parameters["BLOCK_SIZE"] % \
@@ -430,51 +445,8 @@ def main():
 
     
     if runMode == "continue":
-        for logfile in os.listdir("logs"):
-            logfile = logfile[4:] # remove 'log_' at the start
-            if os.path.exists(f"reports/GapReport_{logfile}"): continue
-
-            try:
-                with open(f"logs/log_{logfile}") as f:
-                    logdata = f.read().split('\n')
-            except FileNotFoundError:
-                # sometimes this can happen for some reason, maybe hidden/permission restricted files
-                continue
-            newDeviceIdx = int(logdata[0])
-            if newDeviceIdx != deviceIdx:
-                continue # not for us to do
-            parameters = json.loads(logdata[1])
-
-            recompile(parameters, newDeviceIdx)
-            start, end, minGap = logfile.split("_")
-            start, end, minGap = int(start.split("e")[0]), int(end.split("e")[0]), int(minGap.split(".")[0])
-
-            results = [] # repopulate results
-            for line in logdata:
-                line = line.split()
-                if not line: continue
-                if line[0] == "Gap":
-                    results.append((int(line[1]), float(line[2]), int(line[3])))
-            
-            if logdata[-2].startswith("Progress"):
-                skippedBlocks = int(logdata[-2].split()[2])
-                newStart = int(logdata[-2].split()[1])
-            else:
-                # the log file doesn't have any Progress lines at all
-                skippedBlocks = 0
-                newStart = start*10**12
-
-            top5 = sorted([f"{r[0]:4d}" for r in results], reverse=True, key=lambda x: int(x) if x != "----" else 0)[:5]
-            top5 += ["----"] * (5-len(top5))
-            print(f"Finishing work unit from log file: '{logfile}'")
-            startTime = dt.datetime.now(dt.timezone.utc)
-            results += runOne(parameters, newStart, end*10**12, minGap,
-                              newDeviceIdx, f"logs/log_{logfile}", startTime, skippedBlocks, top5)
-            endTime = dt.datetime.now(dt.timezone.utc)
-            print("\nSaving to file... ", end='')
-            writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"],
-                            startTime, endTime, deviceInfo[newDeviceIdx]["Name"])
-            print("Done")
+        printWarn(f"'continue' mode has been removed. 'run' mode can now run new work units AND continue existing ones.")
+        return
     
     elif runMode in ("run", "forcerun"):
         with open(WORKTODO_FILE) as f:
@@ -508,17 +480,22 @@ def main():
             if start < 1:
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (start must be >=1e12)")
                 continue
-            if end*10**12 > 2**78:
-                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be <2^78)")
+            if end*10**12 > 2**69:
+                printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' (end must be <2^69)")
                 continue
             if minGap % (parameters["WORD_LENGTH"]//4):
                 printWarn(f"WARNING: Skipping invalid work unit: '{Style.RED}{line}{Style.YELLOW}' "
                         f"(minGap must be a multiple of {parameters['WORD_LENGTH']//4})")
                 continue
 
-            msg = ""
             logFilename = getLogFileName(start, end, minGap)
-            if os.path.exists(getReportFileName(start, end, minGap)):
+            reportFilename = getReportFileName(start, end, minGap)
+            msg = ""
+            
+            if not os.path.exists(os.path.dirname(logFilename)):
+                os.makedirs(os.path.dirname(logFilename))
+
+            if os.path.exists(reportFilename):
                 if runMode == "forcerun":
                     msg = f"{Style.BRCYAN}This work unit was fully completed, rerunning it{Style.RESET}"
                 else:
@@ -526,38 +503,79 @@ def main():
                         f"(redo it using 'main.py <deviceIdx> forcerun){Style.RESET}")
                     continue
             
-            if not os.path.exists(os.path.dirname(logFilename)):
-                os.makedirs(os.path.dirname(logFilename))
-            if os.path.exists(logFilename) and runMode == "forcerun":
-                os.remove(logFilename)
-            
             if os.path.exists(logFilename):
-                if runMode == "forcerun" and not msg:
+                if runMode == "forcerun":
                     msg = f"{Style.BRCYAN}This work unit was partially completed, restarting it{Style.RESET}"
-                else:
-                    print(f"{Style.BRCYAN}Skipping partially completed work unit: '{Style.YELLOW}{line}{Style.BRCYAN}' "
-                        f"(finish using 'main.py <deviceIdx> continue'){Style.RESET}")
+                    os.remove(logFilename)
+                try:
+                    with open(logFilename) as f:
+                        logdata = f.read().split('\n')
+                except FileNotFoundError:
+                    printWarn(f"Failed to open existing log file: '{logFilename}'")
+                    # sometimes this can happen for some reason, maybe hidden/permission restricted files
                     continue
+                newDeviceIdx = int(logdata[0])
+                if newDeviceIdx != deviceIdx:
+                    continue # not for us to do
+                parameters = json.loads(logdata[1])
 
-            high64_start = (start*10**12) >> 64
-            high64_end = (end*10**12) >> 64
-            if high64_start == high64_end:
-                parameters["HIGH_64"] = high64_start
+                recompile(parameters, newDeviceIdx)
+                start, end, minGap = os.path.split(logFilename)[-1][4:].split("_")
+                start, end, minGap = int(start.split("e")[0]), int(end.split("e")[0]), int(minGap.split(".")[0])
+
+                results = [] # repopulate results
+                for line in logdata:
+                    line = line.split()
+                    if not line: continue
+                    if line[0] == "Gap":
+                        results.append((int(line[1]), float(line[2]), int(line[3])))
+                
+                if logdata[-2].startswith("Progress"):
+                    skippedBlocks = int(logdata[-2].split()[2])
+                    newStart = int(logdata[-2].split()[1])
+                else:
+                    # the log file doesn't have any Progress lines at all
+                    skippedBlocks = 0
+                    newStart = start*10**12
+
+                top5 = sorted([f"{r[0]:4d}" for r in results], reverse=True, key=lambda x: int(x) if x != "----" else 0)[:5]
+                top5 += ["----"] * (5-len(top5))
+                print(f"Finishing work unit from log file: '{logFilename}'")
+                startTime = dt.datetime.now(dt.timezone.utc)
+                results += runOne(parameters, newStart, end*10**12, minGap,
+                                newDeviceIdx, logFilename, startTime, skippedBlocks, top5)
+                endTime = dt.datetime.now(dt.timezone.utc)
+                print("\nSaving to file... ", end='')
+                writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"],
+                                startTime, endTime, deviceInfo[newDeviceIdx]["Name"])
+                print("Done")
+
             else:
-                if "HIGH_64" in parameters: parameters.pop("HIGH_64")
-                printWarn(f"This work unit sits on a 64-bit border, it might be slower than usual!")
+                high64_start = (start*10**12) >> 64
+                high64_end = (end*10**12) >> 64
+                if high64_start == high64_end:
+                    parameters["HIGH_64"] = high64_start
+                else:
+                    if "HIGH_64" in parameters: parameters.pop("HIGH_64")
+                    printWarn(f"This work unit sits on a 64-bit border, it might be slower than usual!")
 
-            recompile(parameters, deviceIdx)
-            print(f"Running work unit: '{line}' {msg}")
-            startTime = dt.datetime.now(dt.timezone.utc)
-            results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx, logFilename, startTime)
-            endTime = dt.datetime.now(dt.timezone.utc)
-            print("\nSaving to file... ", end='')
-            writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"],
-                            startTime, endTime, deviceInfo[deviceIdx]["Name"])
-            print("Done")
+                recompile(parameters, deviceIdx)
+                print(f"Running work unit: '{line}' {msg}")
+                startTime = dt.datetime.now(dt.timezone.utc)
+                results = runOne(parameters, start*10**12, end*10**12, minGap, deviceIdx, logFilename, startTime)
+                endTime = dt.datetime.now(dt.timezone.utc)
+                print("\nSaving to file... ", end='')
+                writeOutputFile(parameters, start, end, minGap, results, settings["ReportOptions"],
+                                startTime, endTime, deviceInfo[deviceIdx]["Name"])
+                print("Done")
 
     print()
 
 if __name__ == '__main__':
-    main()
+    while True:
+        try:
+            main()
+            break
+        except TimeoutError as e:
+            print('\n'+repr(e))
+            
