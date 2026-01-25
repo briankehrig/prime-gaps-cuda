@@ -187,7 +187,7 @@ def getRecommendedParameters(deviceInfo, targetMemoryUsage, settings):
 
     # we divide targetMemoryUsage by 2 since we will have 2 lists in memory at the same time
     # we first subtract 1.5 GB since that's about how much the small prime wheels take up
-    recommended["BLOCK_SIZE"] = int((deviceInfo["GlobalMemGB"]-1.5)*2**30 * targetMemoryUsage/2) * recommended["WORD_LENGTH"]//4
+    recommended["BLOCK_SIZE"] = int((min(deviceInfo["GlobalMemGB"],32)-1.5)*2**30 * targetMemoryUsage/2) * recommended["WORD_LENGTH"]//4
 
     # TODO: The above calculation needs to depend on the ACTUAL value of SHARED_SIZE_WORDS, not the recommended value!!
     '''
