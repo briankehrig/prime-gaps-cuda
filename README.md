@@ -98,3 +98,8 @@ Note: real-world values may deviate slightly due to various factors.
 | RTX 4070 | 650 |
 | Titan V | 600  |
 | GTX 1660 Mobile | 185
+
+# Results
+This code was/is the main driver of a continuing distributed search for prime gaps. It has been used starting at ~1.962e19 up to past 1e20, and it has found numerous first occurrence gaps in that range, as well as three new maximal gaps of sizes 1676, 1724, and 1854. Before this, prime finding mostly relied on CPU code, which is significantly slower, since this task parallelizes fairly well with the GPU (although there are some unavoidable non-coalesced memory access patterns). To my knowledge, this code is a full order of magnitude faster than previous prime-gap-finding code. 
+
+This page keeps an up-to-date list of known first occurrences and maximal gaps: https://pzktupel.de/RecordGaps/GAP01FO.php
